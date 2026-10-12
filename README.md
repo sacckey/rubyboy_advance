@@ -1,0 +1,25 @@
+# Ruby Boy Advance
+
+A Game Boy Advance emulator written in Ruby. Work in progress.
+
+By the author of [Ruby Boy](https://github.com/sacckey/rubyboy), a Game Boy emulator written in Ruby.
+
+## Development
+
+Requires Ruby 4.0 or later.
+
+```sh
+bundle install
+bundle exec rake
+```
+
+`bundle exec rake` runs the specs and RuboCop.
+
+## Test ROMs
+
+`spec/roms/gba-tests` contains `arm.gba` and `thumb.gba` from
+[jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (MIT License, see its `LICENSE`).
+
+## License
+
+MIT. Ruby Boy Advance is not affiliated with Nintendo. Game Boy Advance is a trademark of Nintendo.
