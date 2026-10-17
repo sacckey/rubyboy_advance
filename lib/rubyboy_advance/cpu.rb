@@ -12,8 +12,7 @@ module RubyboyAdvance
       elsif i[7..11] == 0b00010 && i[0..3] == 0b1001 then :single_data_swap
       elsif i[7..11] == 0b00000 && i[0..3] == 0b1001 then :multiply
       elsif i[7..11] == 0b00001 && i[0..3] == 0b1001 then :multiply_long
-      elsif i[9..11] == 0b000 && i[6] == 0 && i[3] == 1 && i[0] == 1 then :halfword_data_transfer_register
-      elsif i[9..11] == 0b000 && i[6] == 1 && i[3] == 1 && i[0] == 1 then :halfword_data_transfer_immediate
+      elsif i[9..11] == 0b000 && i[3] == 1 && i[0] == 1 then :halfword_data_transfer
       elsif i[7..11] == 0b00010 && i[4..5] == 0b00 then :mrs
       elsif i[10..11] == 0b00 && i[7..8] == 0b10 && i[4..5] == 0b10 then :msr
       elsif i[10..11] == 0b00 then :data_processing
@@ -150,57 +149,31 @@ module RubyboyAdvance
         @regs[opcode[12..15]] = result
       when :single_data_transfer
         offset = opcode[25] == 0 ? opcode[0..11] : raise(format('TODO %<opcode>08X at %<address>08X', opcode:, address:))
-        rn = @regs[opcode[16..19]]
-        addr = rn
-
-        if opcode[24] == 1
-          opcode[23] == 1 ? addr += offset : addr -= offset
-          addr &= 0xFFFF_FFFF
+        transfer(opcode, offset) do |addr|
+          if opcode[20] == 1
+            @regs[opcode[12..15]] = opcode[22] == 0 ? @bus.read32(addr) : @bus.read(addr)
+          else
+            opcode[22] == 0 ? @bus.write32(addr, @regs[opcode[12..15]]) : @bus.write(addr, @regs[opcode[12..15]] & 0xFF)
+          end
         end
-
-        if opcode[20] == 1
-          @regs[opcode[12..15]] = opcode[22] == 0 ? @bus.read32(addr) : @bus.read(addr)
-        else
-          opcode[22] == 0 ? @bus.write32(addr, @regs[opcode[12..15]]) : @bus.write(addr, @regs[opcode[12..15]] & 0xFF)
-        end
-
-        if opcode[24] == 0
-          opcode[23] == 1 ? addr += offset : addr -= offset
-          addr &= 0xFFFF_FFFF
-        end
-
-        @regs[opcode[16..19]] = addr if opcode[24] == 0 || opcode[21] == 1
-      when :halfword_data_transfer_register, :halfword_data_transfer_immediate
+      when :halfword_data_transfer
         offset = opcode[22] == 0 ? @regs[opcode[0..3]] : (opcode[8..11] << 4) | opcode[0..3]
-        rn = @regs[opcode[16..19]]
-        addr = rn
-
-        if opcode[24] == 1
-          opcode[23] == 1 ? addr += offset : addr -= offset
-          addr &= 0xFFFF_FFFF
+        transfer(opcode, offset) do |addr|
+          case (opcode[20] << 2) | opcode[5..6]
+          when 0b001
+            @bus.write16(addr, @regs[opcode[12..15]] & 0xFFFF)
+          when 0b101
+            @regs[opcode[12..15]] = @bus.read16(addr)
+          when 0b110
+            v = @bus.read(addr)
+            @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
+          when 0b111
+            v = @bus.read16(addr)
+            @regs[opcode[12..15]] = v[15] == 1 ? v | 0xFFFF_0000 : v
+          else
+            raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
+          end
         end
-
-        case (opcode[20] << 2) | opcode[5..6]
-        when 0b001
-          @bus.write16(addr, @regs[opcode[12..15]] & 0xFFFF)
-        when 0b101
-          @regs[opcode[12..15]] = @bus.read16(addr)
-        when 0b110
-          v = @bus.read(addr)
-          @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
-        when 0b111
-          v = @bus.read16(addr)
-          @regs[opcode[12..15]] = v[15] == 1 ? v | 0xFFFF_0000 : v
-        else
-          raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
-        end
-
-        if opcode[24] == 0
-          opcode[23] == 1 ? addr += offset : addr -= offset
-          addr &= 0xFFFF_FFFF
-        end
-
-        @regs[opcode[16..19]] = addr if opcode[24] == 0 || opcode[21] == 1
       when :branch
         offset = opcode[0..23]
         offset -= 0x100_0000 if offset[23] == 1
@@ -272,25 +245,30 @@ module RubyboyAdvance
 
     def executable?(opcode)
       case opcode >> 28
-      when 0x0 then return flag_z
-      when 0x1 then return !flag_z
-      when 0x2 then return flag_c
-      when 0x3 then return !flag_c
-      when 0x4 then return flag_n
-      when 0x5 then return !flag_n
-      when 0x6 then return flag_v
-      when 0x7 then return !flag_v
-      when 0x8 then return flag_c && !flag_z
-      when 0x9 then return !flag_c || flag_z
-      when 0xA then return flag_n == flag_v
-      when 0xB then return flag_n != flag_v
-      when 0xC then return !flag_z && (flag_n == flag_v)
-      when 0xD then return flag_z || (flag_n != flag_v)
-      when 0xE then return true
-      when 0xF then return false
+      when 0x0 then flag_z
+      when 0x1 then !flag_z
+      when 0x2 then flag_c
+      when 0x3 then !flag_c
+      when 0x4 then flag_n
+      when 0x5 then !flag_n
+      when 0x6 then flag_v
+      when 0x7 then !flag_v
+      when 0x8 then flag_c && !flag_z
+      when 0x9 then !flag_c || flag_z
+      when 0xA then flag_n == flag_v
+      when 0xB then flag_n != flag_v
+      when 0xC then !flag_z && (flag_n == flag_v)
+      when 0xD then flag_z || (flag_n != flag_v)
+      when 0xE then true
+      else false
       end
+    end
 
-      false
+    def transfer(opcode, offset)
+      rn = opcode[16..19]
+      offset_addr = (opcode[23] == 1 ? @regs[rn] + offset : @regs[rn] - offset) & 0xFFFF_FFFF
+      yield(opcode[24] == 1 ? offset_addr : @regs[rn])
+      @regs[rn] = offset_addr if opcode[24] == 0 || opcode[21] == 1
     end
 
     def determine_instruction(opcode)
