@@ -2,6 +2,25 @@
 
 module RubyboyAdvance
   class Cpu
+    INSTRUCTION_TABLE = Array.new(0x1000) do |i|
+      if i == 0b000100100001 then :branch_and_exchange
+      elsif i[9..11] == 0b100 then :block_data_transfer
+      elsif i[9..11] == 0b101 then :branch
+      elsif i[8..11] == 0b1111 then :software_interrupt
+      elsif i[9..11] == 0b011 && i[0] == 1 then :undefined
+      elsif i[10..11] == 0b01 then :single_data_transfer
+      elsif i[7..11] == 0b00010 && i[0..3] == 0b1001 then :single_data_swap
+      elsif i[7..11] == 0b00000 && i[0..3] == 0b1001 then :multiply
+      elsif i[7..11] == 0b00001 && i[0..3] == 0b1001 then :multiply_long
+      elsif i[9..11] == 0b000 && i[6] == 0 && i[3] == 1 && i[0] == 1 then :halfword_data_transfer_register
+      elsif i[9..11] == 0b000 && i[6] == 1 && i[3] == 1 && i[0] == 1 then :halfword_data_transfer_immediate
+      elsif i[7..11] == 0b00010 && i[4..5] == 0b00 then :mrs
+      elsif i[10..11] == 0b00 && i[7..8] == 0b10 && i[4..5] == 0b10 then :msr
+      elsif i[10..11] == 0b00 then :data_processing
+      else :unknown
+      end
+    end.freeze
+
     def initialize(bus)
       @regs = Array.new(16, 0)
       self.sp = 0x0300_7F00
@@ -16,7 +35,175 @@ module RubyboyAdvance
       self.pc += 4
       return unless executable?(opcode)
 
-      raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
+      instruction = determine_instruction(opcode)
+      case instruction
+      when :data_processing
+        s = opcode[20] == 1
+        rn = @regs[opcode[16..19]]
+        op2 = if opcode[25] == 0
+                raise format('TODO %<opcode>08X at %<address>08X', opcode:, address:)
+              else
+                n = opcode[8..11] * 2
+                x = opcode[0..7]
+                ((x >> n) | (x << (32 - n))) & 0xFFFF_FFFF
+              end
+
+        result =
+          case opcode[21..24]
+          when 0x00 then rn & op2
+          when 0x01 then rn ^ op2
+          when 0x02
+            tmp = rn - op2
+            if s
+              self.flag_c = (rn >= op2)
+              self.flag_v = ((rn ^ op2) & (rn ^ tmp))[31] == 1
+            end
+
+            tmp
+          when 0x03
+            tmp = op2 - rn
+            if s
+              self.flag_c = (op2 >= rn)
+              self.flag_v = ((op2 ^ rn) & (op2 ^ tmp))[31] == 1
+            end
+
+            tmp
+          when 0x04
+            tmp = rn + op2
+            if s
+              self.flag_c = (tmp > 0xFFFF_FFFF)
+              self.flag_v = ((rn ^ tmp) & (op2 ^ tmp))[31] == 1
+            end
+
+            tmp
+          when 0x05
+            tmp = rn + op2 + (flag_c ? 1 : 0)
+            if s
+              self.flag_c = (tmp > 0xFFFF_FFFF)
+              self.flag_v = ((rn ^ tmp) & (op2 ^ tmp))[31] == 1
+            end
+
+            tmp
+          when 0x06
+            tmp = rn - op2 - (flag_c ? 0 : 1)
+            if s
+              self.flag_c = (rn >= op2 + (flag_c ? 0 : 1))
+              self.flag_v = ((rn ^ op2) & (rn ^ tmp))[31] == 1
+            end
+
+            tmp
+          when 0x07
+            tmp = op2 - rn - (flag_c ? 0 : 1)
+            if s
+              self.flag_c = (op2 >= rn + (flag_c ? 0 : 1))
+              self.flag_v = ((op2 ^ rn) & (op2 ^ tmp))[31] == 1
+            end
+
+            tmp
+          when 0x08
+            tmp = rn & op2
+            if s
+              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
+              self.flag_n = tmp[31] == 1
+            end
+
+            return
+          when 0x09
+            tmp = rn ^ op2
+            if s
+              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
+              self.flag_n = tmp[31] == 1
+            end
+
+            return
+          when 0x0A
+            tmp = rn - op2
+            if s
+              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
+              self.flag_n = tmp[31] == 1
+              self.flag_c = (rn >= op2)
+              self.flag_v = ((rn ^ op2) & (rn ^ tmp))[31] == 1
+            end
+
+            return
+          when 0x0B
+            tmp = rn + op2
+            if s
+              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
+              self.flag_n = tmp[31] == 1
+              self.flag_c = (tmp > 0xFFFF_FFFF)
+              self.flag_v = ((rn ^ tmp) & (op2 ^ tmp))[31] == 1
+            end
+
+            return
+          when 0x0C then rn | op2
+          when 0x0D then op2
+          when 0x0E then rn & ~op2
+          when 0x0F then ~op2
+          end & 0xFFFF_FFFF
+
+        if s
+          self.flag_z = result == 0
+          self.flag_n = result[31] == 1
+        end
+
+        @regs[opcode[12..15]] = result
+      when :single_data_transfer
+        offset = opcode[25] == 0 ? opcode[0..11] : raise(format('TODO %<opcode>08X at %<address>08X', opcode:, address:))
+        rn = @regs[opcode[16..19]]
+        addr = rn
+
+        if opcode[24] == 1
+          opcode[23] == 1 ? addr += offset : addr -= offset
+          addr &= 0xFFFF_FFFF
+        end
+
+        if opcode[20] == 1
+          @regs[opcode[12..15]] = opcode[22] == 0 ? @bus.read32(addr) : @bus.read(addr)
+        else
+          opcode[22] == 0 ? @bus.write32(addr, @regs[opcode[12..15]]) : @bus.write(addr, @regs[opcode[12..15]] & 0xFF)
+        end
+
+        if opcode[24] == 0
+          opcode[23] == 1 ? addr += offset : addr -= offset
+          addr &= 0xFFFF_FFFF
+        end
+
+        @regs[opcode[16..19]] = addr if opcode[24] == 0 || opcode[21] == 1
+      when :halfword_data_transfer_register, :halfword_data_transfer_immediate
+        offset = opcode[22] == 0 ? @regs[opcode[0..3]] : (opcode[8..11] << 4) | opcode[0..3]
+        rn = @regs[opcode[16..19]]
+        addr = rn
+
+        if opcode[24] == 1
+          opcode[23] == 1 ? addr += offset : addr -= offset
+          addr &= 0xFFFF_FFFF
+        end
+
+        case (opcode[20] << 2) | opcode[5..6]
+        when 0b001
+          @bus.write16(addr, @regs[opcode[12..15]] & 0xFFFF)
+        when 0b101
+          @regs[opcode[12..15]] = @bus.read16(addr)
+        when 0b110
+          v = @bus.read(addr)
+          @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
+        when 0b111
+          v = @bus.read16(addr)
+          @regs[opcode[12..15]] = v[15] == 1 ? v | 0xFFFF_0000 : v
+        else
+          raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
+        end
+
+        if opcode[24] == 0
+          opcode[23] == 1 ? addr += offset : addr -= offset
+          addr &= 0xFFFF_FFFF
+        end
+
+        @regs[opcode[16..19]] = addr if opcode[24] == 0 || opcode[21] == 1
+      else
+        raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
+      end
     end
 
     private
@@ -49,16 +236,32 @@ module RubyboyAdvance
       @cpsr[30] == 1
     end
 
+    def flag_z=(value)
+      @cpsr = value ? @cpsr | (1 << 30) : @cpsr & ~(1 << 30)
+    end
+
     def flag_n
       @cpsr[31] == 1
+    end
+
+    def flag_n=(value)
+      @cpsr = value ? @cpsr | (1 << 31) : @cpsr & ~(1 << 31)
     end
 
     def flag_c
       @cpsr[29] == 1
     end
 
+    def flag_c=(value)
+      @cpsr = value ? @cpsr | (1 << 29) : @cpsr & ~(1 << 29)
+    end
+
     def flag_v
       @cpsr[28] == 1
+    end
+
+    def flag_v=(value)
+      @cpsr = value ? @cpsr | (1 << 28) : @cpsr & ~(1 << 28)
     end
 
     def executable?(opcode)
@@ -82,6 +285,10 @@ module RubyboyAdvance
       end
 
       false
+    end
+
+    def determine_instruction(opcode)
+      INSTRUCTION_TABLE[opcode[20..27] << 4 | opcode[4..7]]
     end
   end
 end
