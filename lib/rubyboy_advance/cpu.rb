@@ -201,6 +201,12 @@ module RubyboyAdvance
         end
 
         @regs[opcode[16..19]] = addr if opcode[24] == 0 || opcode[21] == 1
+      when :branch
+        offset = opcode[0..23]
+        offset -= 0x100_0000 if offset[23] == 1
+        self.lr = pc if opcode[24] == 1
+
+        self.pc = pc + 4 + (offset << 2)
       else
         raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
       end
