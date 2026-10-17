@@ -20,6 +20,9 @@ bundle exec rake
 `spec/roms/gba-tests` contains `arm.gba` and `thumb.gba` from
 [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) (MIT License, see its `LICENSE`).
 
+`spec/roms/hello-red/hello-red.gba` is a hand-assembled 44-byte ROM that fills the screen red in
+BG mode 3; its source is `hello-red.s` next to it.
+
 ## License
 
 MIT. Ruby Boy Advance is not affiliated with Nintendo. Game Boy Advance is a trademark of Nintendo.
