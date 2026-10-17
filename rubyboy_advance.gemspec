@@ -18,7 +18,9 @@ Gem::Specification.new do |spec|
 
   # Test ROMs stay in the repository.
   spec.files = Dir.chdir(__dir__) do
-    `git ls-files -z lib LICENSE README.md`.split("\x0")
+    `git ls-files -z lib exe LICENSE README.md`.split("\x0")
   end
+  spec.bindir = 'exe'
+  spec.executables = ['rubyboy-advance']
   spec.require_paths = ['lib']
 end

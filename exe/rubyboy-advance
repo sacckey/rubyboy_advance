@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'rubyboy_advance'
+
+abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
+
+rom = File.binread(ARGV[0]).bytes
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom))
+begin
+  loop { cpu.exec }
+rescue RuntimeError => e
+  abort e.message
+end
