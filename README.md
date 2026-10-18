@@ -15,6 +15,14 @@ bundle exec rake
 
 `bundle exec rake` runs the specs and RuboCop.
 
+## Usage
+
+Running a ROM needs [SDL3](https://libsdl.org/) (on macOS: `brew install sdl3`). The specs do not.
+
+```sh
+bundle exec exe/rubyboy-advance spec/roms/hello-red/hello-red.gba
+```
+
 ## Test ROMs
 
 `spec/roms/gba-tests` contains `arm.gba` and `thumb.gba` from

@@ -2,19 +2,23 @@
 # frozen_string_literal: true
 
 require 'rubyboy_advance'
+require 'rubyboy_advance/lcd'
 
 abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
 
 rom = File.binread(ARGV[0]).bytes
 ppu = RubyboyAdvance::Ppu.new
 cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu))
+lcd = RubyboyAdvance::Lcd.new
 begin
-  vblank_count = 0
   loop do
-    cycles = cpu.exec
-    vblank_count += 1 if ppu.step(cycles)
-    break if vblank_count == 3
+    next unless ppu.step(cpu.exec)
+
+    lcd.draw(ppu.buffer)
+    break if lcd.window_should_close?
   end
 rescue RuntimeError => e
   abort e.message
+ensure
+  lcd.close
 end
