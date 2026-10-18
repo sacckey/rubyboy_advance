@@ -23,4 +23,6 @@ Gem::Specification.new do |spec|
   spec.bindir = 'exe'
   spec.executables = ['rubyboy-advance']
   spec.require_paths = ['lib']
+
+  spec.add_dependency 'ffi', '~> 1.17'
 end

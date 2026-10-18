@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 RSpec.describe RubyboyAdvance::Bus do
-  let(:bus) { described_class.new([0x78, 0x56, 0x34, 0x12]) }
+  let(:bus) { described_class.new([0x78, 0x56, 0x34, 0x12], RubyboyAdvance::Ppu.new) }
 
   {
     'EWRAM' => [0x0200_0000, 0x0204_0000],

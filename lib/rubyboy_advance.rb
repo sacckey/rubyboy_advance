@@ -2,4 +2,5 @@
 
 require_relative 'rubyboy_advance/bus'
 require_relative 'rubyboy_advance/cpu'
+require_relative 'rubyboy_advance/ppu'
 require_relative 'rubyboy_advance/version'
