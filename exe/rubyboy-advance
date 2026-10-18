@@ -6,9 +6,15 @@ require 'rubyboy_advance'
 abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
 
 rom = File.binread(ARGV[0]).bytes
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom))
+ppu = RubyboyAdvance::Ppu.new
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu))
 begin
-  loop { cpu.exec }
+  vblank_count = 0
+  loop do
+    cycles = cpu.exec
+    vblank_count += 1 if ppu.step(cycles)
+    break if vblank_count == 3
+  end
 rescue RuntimeError => e
   abort e.message
 end

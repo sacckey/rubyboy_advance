@@ -32,7 +32,7 @@ module RubyboyAdvance
       address = pc
       opcode = @bus.read32(address)
       self.pc += 4
-      return unless executable?(opcode)
+      return 1 unless executable?(opcode)
 
       instruction = determine_instruction(opcode)
       case instruction
@@ -106,7 +106,7 @@ module RubyboyAdvance
               self.flag_n = tmp[31] == 1
             end
 
-            return
+            return 1
           when 0x09
             tmp = rn ^ op2
             if s
@@ -114,7 +114,7 @@ module RubyboyAdvance
               self.flag_n = tmp[31] == 1
             end
 
-            return
+            return 1
           when 0x0A
             tmp = rn - op2
             if s
@@ -124,7 +124,7 @@ module RubyboyAdvance
               self.flag_v = ((rn ^ op2) & (rn ^ tmp))[31] == 1
             end
 
-            return
+            return 1
           when 0x0B
             tmp = rn + op2
             if s
@@ -134,7 +134,7 @@ module RubyboyAdvance
               self.flag_v = ((rn ^ tmp) & (op2 ^ tmp))[31] == 1
             end
 
-            return
+            return 1
           when 0x0C then rn | op2
           when 0x0D then op2
           when 0x0E then rn & ~op2
@@ -183,6 +183,8 @@ module RubyboyAdvance
       else
         raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
       end
+      # TODO: Implement proper cycle counting and other side effects for each instruction.
+      1
     end
 
     private
