@@ -67,11 +67,7 @@ module RubyboyAdvance
         elsif opcode >> 12 == 0b1010
           rd = opcode[8..10]
           nn = opcode[0..7]
-          if opcode[11] == 0
-            @regs[rd] = (reg(15) & ~2) + (nn << 2)
-          else
-            @regs[rd] = self.sp + (nn << 2)
-          end
+          @regs[rd] = (opcode[11] == 0 ? reg(15) & ~2 : sp) + (nn << 2)
         else
           raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
         end

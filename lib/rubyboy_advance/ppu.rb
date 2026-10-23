@@ -6,7 +6,6 @@ module RubyboyAdvance
 
     def initialize
       @cycles = 0
-      @line = 0
       @io = Array.new(0x60, 0)
       @palram = Array.new(0x400, 0)
       @vram = Array.new(0x18000, 0)
@@ -20,8 +19,9 @@ module RubyboyAdvance
 
       while @cycles >= 1232
         @cycles -= 1232
-        @line += 1
-        if @line == 160
+        self.vcount += 1
+        if vcount == 160
+          self.vblank = true
           res = true
           dispcnt = read_io16(0)
           case dispcnt & 0x7
@@ -31,7 +31,9 @@ module RubyboyAdvance
             end
           end
         end
-        @line = 0 if @line == 228
+
+        self.vblank = false if vcount == 227
+        self.vcount = 0 if vcount == 228
       end
 
       res
@@ -46,7 +48,11 @@ module RubyboyAdvance
     end
 
     def write_io(offset, value)
-      @io[offset] = value
+      case offset
+      when 4 then @io[4] = (value & ~0b111) | (@io[4] & 0b111) # DISPSTAT bits 0-2 are read-only
+      when 6, 7 then nil # VCOUNT is read-only
+      else @io[offset] = value
+      end
     end
 
     def read_palram(addr)
@@ -74,6 +80,18 @@ module RubyboyAdvance
     end
 
     private
+
+    def vcount
+      @io[6]
+    end
+
+    def vcount=(value)
+      @io[6] = value
+    end
+
+    def vblank=(value)
+      @io[4] = value ? @io[4] | 1 : @io[4] & ~1
+    end
 
     def vram_index(addr)
       addr[16] == 0 ? addr & 0xFFFF : addr & 0x17FFF
