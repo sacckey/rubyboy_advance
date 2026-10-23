@@ -29,6 +29,12 @@ module RubyboyAdvance
             (160 * 240).times do |i|
               @buffer[i] = @vram[i << 1] | (@vram[(i << 1) + 1] << 8)
             end
+          when 4
+            start_address = dispcnt[4] == 0 ? 0 : 0xA000
+            (160 * 240).times do |i|
+              palette_offset = @vram[start_address + i] << 1
+              @buffer[i] = @palram[palette_offset] | (@palram[palette_offset + 1] << 8)
+            end
           end
         end
 
