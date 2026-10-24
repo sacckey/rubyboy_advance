@@ -240,6 +240,21 @@ module RubyboyAdvance
             opcode[22] == 0 ? @bus.write32(addr, reg(opcode[12..15])) : @bus.write(addr, reg(opcode[12..15]) & 0xFF)
           end
         end
+      when :multiply
+        case opcode[21]
+        when 0
+          result = (reg(opcode[0..3]) * reg(opcode[8..11])) & 0xFFFF_FFFF
+        when 1
+          result = (reg(opcode[0..3]) * reg(opcode[8..11]) + reg(opcode[12..15])) & 0xFFFF_FFFF
+        end
+
+        if opcode[20] == 1
+          self.flag_z = result == 0
+          self.flag_n = result[31] == 1
+        end
+
+        @regs[opcode[16..19]] = result
+
       when :halfword_data_transfer
         offset = opcode[22] == 0 ? reg(opcode[0..3]) : (opcode[8..11] << 4) | opcode[0..3]
         transfer(opcode, offset) do |addr|
