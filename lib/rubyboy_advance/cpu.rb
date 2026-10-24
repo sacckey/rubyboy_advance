@@ -264,6 +264,21 @@ module RubyboyAdvance
         self.lr = pc if opcode[24] == 1
 
         self.pc = reg(15) + (offset << 2)
+      when :software_interrupt
+        case opcode[16..23]
+        when 6
+          raise 'Division by zero' if @regs[1] == 0
+
+          regs0 = uint_to_int(@regs[0])
+          regs1 = uint_to_int(@regs[1])
+
+          rem = regs0.remainder(regs1)
+          @regs[0] = int_to_uint((regs0 - rem) / regs1)
+          @regs[1] = int_to_uint(rem)
+          @regs[3] = (regs0.abs / regs1.abs)
+        else
+          raise format('Unknown software interrupt %<opcode>08X at %<address>08X', opcode:, address:)
+        end
       when :msr
         x = opcode[25] == 0 ? reg(opcode[0..3]) : rot(opcode[0..7], opcode[8..11] * 2)
         mask = 0xFF000000 * opcode[19] | 0x00FF0000 * opcode[18] | 0x0000FF00 * opcode[17] | 0x000000FF * opcode[16]
@@ -276,6 +291,14 @@ module RubyboyAdvance
     end
 
     private
+
+    def int_to_uint(n)
+      n & 0xFFFF_FFFF
+    end
+
+    def uint_to_int(n)
+      n[31] == 1 ? n - 0x1_0000_0000 : n
+    end
 
     def sp
       @regs[13]
