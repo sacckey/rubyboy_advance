@@ -208,7 +208,7 @@ module RubyboyAdvance
         rd = opcode[12..15]
         if s
           if rd == 15
-            tmp = @spsrs[to_cpu_mode(@cpsr & 0x1F)]
+            tmp = spsr(to_cpu_mode(@cpsr & 0x1F))
             update_banked_regs(to_cpu_mode(tmp))
             @cpsr = tmp
           else
@@ -313,6 +313,10 @@ module RubyboyAdvance
     end
 
     private
+
+    def spsr(mode)
+      mode == :usr ? @cpsr : @spsrs[mode]
+    end
 
     def sys_mode?
       @cpsr & 0x1F == 0x1F
