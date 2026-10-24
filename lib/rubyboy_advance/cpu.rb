@@ -245,10 +245,12 @@ module RubyboyAdvance
             end
           end
         transfer(opcode, offset) do |addr|
+          rd = opcode[12..15]
           if opcode[20] == 1
-            @regs[opcode[12..15]] = opcode[22] == 0 ? ror(@bus.read32(addr), (addr & 3) * 8) : @bus.read(addr)
+            @regs[rd] = opcode[22] == 0 ? ror(@bus.read32(addr), (addr & 3) * 8) : @bus.read(addr)
           else
-            opcode[22] == 0 ? @bus.write32(addr, reg(opcode[12..15])) : @bus.write(addr, reg(opcode[12..15]) & 0xFF)
+            value = rd == 15 ? reg(rd) + 4 : reg(rd)
+            opcode[22] == 0 ? @bus.write32(addr, value) : @bus.write(addr, value & 0xFF)
           end
         end
       when :multiply
@@ -284,7 +286,9 @@ module RubyboyAdvance
         transfer(opcode, offset) do |addr|
           case (opcode[20] << 2) | opcode[5..6]
           when 0b001
-            @bus.write16(addr, reg(opcode[12..15]) & 0xFFFF)
+            rd = opcode[12..15]
+            value = rd == 15 ? reg(rd) + 4 : reg(rd)
+            @bus.write16(addr, value & 0xFFFF)
           when 0b101
             @regs[opcode[12..15]] = @bus.read16(addr)
           when 0b110
@@ -564,9 +568,10 @@ module RubyboyAdvance
 
     def transfer(opcode, offset)
       rn_index = opcode[16..19]
+      rd_index = opcode[12..15]
       offset_addr = (opcode[23] == 1 ? reg(rn_index) + offset : reg(rn_index) - offset) & 0xFFFF_FFFF
       yield(opcode[24] == 1 ? offset_addr : reg(rn_index))
-      @regs[rn_index] = offset_addr if opcode[24] == 0 || opcode[21] == 1
+      @regs[rn_index] = offset_addr if (opcode[24] == 0 || opcode[21] == 1) && (opcode[20] == 0 || rn_index != rd_index)
     end
 
     def determine_instruction(opcode)
