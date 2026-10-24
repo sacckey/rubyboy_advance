@@ -208,7 +208,7 @@ module RubyboyAdvance
         rd = opcode[12..15]
         if s
           if rd == 15
-            tmp = spsr(to_cpu_mode(@cpsr & 0x1F))
+            tmp = spsr(current_cpu_mode)
             update_banked_regs(to_cpu_mode(tmp))
             @cpsr = tmp
           else
@@ -293,6 +293,7 @@ module RubyboyAdvance
         else
           raise format('Unknown software interrupt %<opcode>08X at %<address>08X', opcode:, address:)
         end
+      when :mrs then @regs[opcode[12..15]] = opcode[22] == 0 ? @cpsr : spsr(current_cpu_mode)
       when :msr
         x = opcode[25] == 0 ? reg(opcode[0..3]) : ror(opcode[0..7], opcode[8..11] * 2)
         mask = 0xFF000000 * opcode[19] | 0x00FF0000 * opcode[18] | 0x0000FF00 * opcode[17] | 0x000000FF * opcode[16]
@@ -302,7 +303,7 @@ module RubyboyAdvance
           update_banked_regs(to_cpu_mode(result))
           @cpsr = result
         else
-          mode = to_cpu_mode(@cpsr)
+          mode = current_cpu_mode
           @spsrs[mode] = (@spsrs[mode] & ~mask) | (x & mask)
         end
       else
@@ -313,6 +314,10 @@ module RubyboyAdvance
     end
 
     private
+
+    def current_cpu_mode
+      to_cpu_mode(@cpsr)
+    end
 
     def spsr(mode)
       mode == :usr ? @cpsr : @spsrs[mode]
@@ -349,7 +354,7 @@ module RubyboyAdvance
     end
 
     def update_banked_regs(new_mode)
-      current_mode = to_cpu_mode(@cpsr)
+      current_mode = current_cpu_mode
 
       return if new_mode == current_mode
 
