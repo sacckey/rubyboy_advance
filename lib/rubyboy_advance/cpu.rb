@@ -25,6 +25,10 @@ module RubyboyAdvance
       self.sp = 0x0300_7F00
       self.pc = 0x0800_0000
       @cpsr = 0x1F
+      @spsrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
+      @banked_regs = { usr: Array.new(5, 0), fiq: Array.new(5, 0) }
+      @sps = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
+      @lrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @bus = bus
     end
 
@@ -195,15 +199,22 @@ module RubyboyAdvance
           when 0x0F then ~op2
           end & 0xFFFF_FFFF
 
+        rd = opcode[12..15]
         if s
-          unless @shifter_carry.nil?
-            case code
-            when 0x00, 0x01, 0x08, 0x09, 0x0C, 0x0D, 0x0E, 0x0F
-              self.flag_c = @shifter_carry
+          if rd == 15
+            tmp = @spsrs[to_cpu_mode(@cpsr & 0x1F)]
+            update_banked_regs(to_cpu_mode(tmp))
+            @cpsr = tmp
+          else
+            unless @shifter_carry.nil?
+              case code
+              when 0x00, 0x01, 0x08, 0x09, 0x0C, 0x0D, 0x0E, 0x0F
+                self.flag_c = @shifter_carry
+              end
             end
+            self.flag_z = result == 0
+            self.flag_n = result[31] == 1
           end
-          self.flag_z = result == 0
-          self.flag_n = result[31] == 1
         end
 
         case code
@@ -211,7 +222,7 @@ module RubyboyAdvance
           return 1
         end
 
-        @regs[opcode[12..15]] = result
+        @regs[rd] = result
 
       when :single_data_transfer
         offset = opcode[25] == 0 ? opcode[0..11] : raise(format('TODO %<opcode>08X at %<address>08X', opcode:, address:))
@@ -279,7 +290,15 @@ module RubyboyAdvance
       when :msr
         x = opcode[25] == 0 ? reg(opcode[0..3]) : ror(opcode[0..7], opcode[8..11] * 2)
         mask = 0xFF000000 * opcode[19] | 0x00FF0000 * opcode[18] | 0x0000FF00 * opcode[17] | 0x000000FF * opcode[16]
-        @cpsr = (@cpsr & ~mask) | (x & mask)
+
+        if opcode[22] == 0
+          result = (@cpsr & ~mask) | (x & mask)
+          update_banked_regs(to_cpu_mode(result))
+          @cpsr = result
+        else
+          mode = to_cpu_mode(@cpsr)
+          @spsrs[mode] = (@spsrs[mode] & ~mask) | (x & mask)
+        end
       else
         raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
       end
@@ -288,6 +307,51 @@ module RubyboyAdvance
     end
 
     private
+
+    def sys_mode?
+      @cpsr & 0x1F == 0x1F
+    end
+
+    def to_cpu_mode(value)
+      case value & 0x1F
+      when 0x10, 0x1F then :usr
+      when 0x11 then :fiq
+      when 0x12 then :irq
+      when 0x13 then :svc
+      when 0x17 then :abt
+      when 0x1B then :und
+      else raise "Unknown CPU mode: #{value & 0x1F}"
+      end
+    end
+
+    def banked_regs_by_mode(mode)
+      case mode
+      when :fiq then @banked_regs[:fiq]
+      else @banked_regs[:usr]
+      end
+    end
+
+    def set_banked_regs_by_mode(mode, value)
+      case mode
+      when :fiq then @banked_regs[:fiq] = value
+      else @banked_regs[:usr] = value
+      end
+    end
+
+    def update_banked_regs(new_mode)
+      current_mode = to_cpu_mode(@cpsr)
+
+      return if new_mode == current_mode
+
+      @sps[current_mode] = sp
+      self.sp = @sps[new_mode]
+
+      @lrs[current_mode] = lr
+      self.lr = @lrs[new_mode]
+
+      set_banked_regs_by_mode(current_mode, @regs[8..12])
+      @regs[8..12] = banked_regs_by_mode(new_mode)
+    end
 
     def int_to_uint(n)
       n & 0xFFFF_FFFF
