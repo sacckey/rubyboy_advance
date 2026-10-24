@@ -231,7 +231,19 @@ module RubyboyAdvance
         @regs[rd] = result
 
       when :single_data_transfer
-        offset = opcode[25] == 0 ? opcode[0..11] : raise(format('TODO %<opcode>08X at %<address>08X', opcode:, address:))
+        offset =
+          if opcode[25] == 0
+            opcode[0..11]
+          else
+            rm = reg(opcode[0..3])
+            shift_amount = opcode[7..11]
+            case opcode[5..6]
+            when 0b00 then lsl(rm, shift_amount)
+            when 0b01 then shift_amount == 0 ? lsr(rm, 32) : lsr(rm, shift_amount)
+            when 0b10 then shift_amount == 0 ? asr(rm, 32) : asr(rm, shift_amount)
+            when 0b11 then shift_amount == 0 ? rrx(rm) : ror(rm, shift_amount)
+            end
+          end
         transfer(opcode, offset) do |addr|
           if opcode[20] == 1
             @regs[opcode[12..15]] = opcode[22] == 0 ? @bus.read32(addr) : @bus.read(addr)
@@ -551,10 +563,10 @@ module RubyboyAdvance
     end
 
     def transfer(opcode, offset)
-      rn = opcode[16..19]
-      offset_addr = (opcode[23] == 1 ? reg(rn) + offset : reg(rn) - offset) & 0xFFFF_FFFF
-      yield(opcode[24] == 1 ? offset_addr : reg(rn))
-      @regs[rn] = offset_addr if opcode[24] == 0 || opcode[21] == 1
+      rn_index = opcode[16..19]
+      offset_addr = (opcode[23] == 1 ? reg(rn_index) + offset : reg(rn_index) - offset) & 0xFFFF_FFFF
+      yield(opcode[24] == 1 ? offset_addr : reg(rn_index))
+      @regs[rn_index] = offset_addr if opcode[24] == 0 || opcode[21] == 1
     end
 
     def determine_instruction(opcode)
