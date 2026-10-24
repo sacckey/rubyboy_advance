@@ -246,7 +246,7 @@ module RubyboyAdvance
           end
         transfer(opcode, offset) do |addr|
           if opcode[20] == 1
-            @regs[opcode[12..15]] = opcode[22] == 0 ? @bus.read32(addr) : @bus.read(addr)
+            @regs[opcode[12..15]] = opcode[22] == 0 ? ror(@bus.read32(addr), (addr & 3) * 8) : @bus.read(addr)
           else
             opcode[22] == 0 ? @bus.write32(addr, reg(opcode[12..15])) : @bus.write(addr, reg(opcode[12..15]) & 0xFF)
           end

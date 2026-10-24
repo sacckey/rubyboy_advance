@@ -57,10 +57,12 @@ module RubyboyAdvance
     end
 
     def read32(addr)
+      addr &= ~3
       read16(addr) + (read16(addr + 2) << 16)
     end
 
     def write32(addr, value)
+      addr &= ~3
       write16(addr, value & 0xFFFF)
       write16(addr + 2, (value >> 16) & 0xFFFF)
     end
