@@ -114,28 +114,34 @@ module RubyboyAdvance
       when :data_processing
         s = opcode[20] == 1
         rn = reg(opcode[16..19])
+        @shifter_carry = nil
         op2 = if opcode[25] == 0
-                n = opcode[4] == 0 ? opcode[7..11] : reg(opcode[8..11]) & 0xFF
+                r = opcode[4]
+                n = r == 0 ? opcode[7..11] : reg(opcode[8..11]) & 0xFF
                 x = reg(opcode[0..3])
                 case opcode[5..6]
                 when 0b00
-                  # Logical shift left
-                  ((x << n) & 0xFFFF_FFFF)
-                else
-                  # Other shift types not implemented yet
-                  raise format('TODO %<opcode>08X at %<address>08X', opcode:, address:)
+                  lsl(x, n, s:)
+                when 0b01
+                  n = 32 if r == 0 && n == 0
+                  lsr(x, n, s:)
+                when 0b10
+                  n = 32 if r == 0 && n == 0
+                  asr(x, n, s:)
+                when 0b11
+                  r == 0 && n == 0 ? rrx(x, s:) : ror(x, n, s:)
                 end
               else
                 n = opcode[8..11] * 2
                 x = opcode[0..7]
-                ((x >> n) | (x << (32 - n))) & 0xFFFF_FFFF
+                ror(x, n, s:)
               end
-
+        code = opcode[21..24]
         result =
-          case opcode[21..24]
-          when 0x00 then rn & op2
-          when 0x01 then rn ^ op2
-          when 0x02
+          case code
+          when 0x00, 0x08 then rn & op2
+          when 0x01, 0x09 then rn ^ op2
+          when 0x02, 0x0A
             tmp = rn - op2
             if s
               self.flag_c = (rn >= op2)
@@ -151,7 +157,7 @@ module RubyboyAdvance
             end
 
             tmp
-          when 0x04
+          when 0x04, 0x0B
             tmp = rn + op2
             if s
               self.flag_c = (tmp > 0xFFFF_FFFF)
@@ -183,42 +189,6 @@ module RubyboyAdvance
             end
 
             tmp
-          when 0x08
-            tmp = rn & op2
-            if s
-              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
-              self.flag_n = tmp[31] == 1
-            end
-
-            return 1
-          when 0x09
-            tmp = rn ^ op2
-            if s
-              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
-              self.flag_n = tmp[31] == 1
-            end
-
-            return 1
-          when 0x0A
-            tmp = rn - op2
-            if s
-              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
-              self.flag_n = tmp[31] == 1
-              self.flag_c = (rn >= op2)
-              self.flag_v = ((rn ^ op2) & (rn ^ tmp))[31] == 1
-            end
-
-            return 1
-          when 0x0B
-            tmp = rn + op2
-            if s
-              self.flag_z = (tmp & 0xFFFF_FFFF == 0)
-              self.flag_n = tmp[31] == 1
-              self.flag_c = (tmp > 0xFFFF_FFFF)
-              self.flag_v = ((rn ^ tmp) & (op2 ^ tmp))[31] == 1
-            end
-
-            return 1
           when 0x0C then rn | op2
           when 0x0D then op2
           when 0x0E then rn & ~op2
@@ -226,11 +196,23 @@ module RubyboyAdvance
           end & 0xFFFF_FFFF
 
         if s
+          unless @shifter_carry.nil?
+            case code
+            when 0x00, 0x01, 0x08, 0x09, 0x0C, 0x0D, 0x0E, 0x0F
+              self.flag_c = @shifter_carry
+            end
+          end
           self.flag_z = result == 0
           self.flag_n = result[31] == 1
         end
 
+        case code
+        when 0x08, 0x09, 0x0A, 0x0B
+          return 1
+        end
+
         @regs[opcode[12..15]] = result
+
       when :single_data_transfer
         offset = opcode[25] == 0 ? opcode[0..11] : raise(format('TODO %<opcode>08X at %<address>08X', opcode:, address:))
         transfer(opcode, offset) do |addr|
@@ -295,7 +277,7 @@ module RubyboyAdvance
           raise format('Unknown software interrupt %<opcode>08X at %<address>08X', opcode:, address:)
         end
       when :msr
-        x = opcode[25] == 0 ? reg(opcode[0..3]) : rot(opcode[0..7], opcode[8..11] * 2)
+        x = opcode[25] == 0 ? reg(opcode[0..3]) : ror(opcode[0..7], opcode[8..11] * 2)
         mask = 0xFF000000 * opcode[19] | 0x00FF0000 * opcode[18] | 0x0000FF00 * opcode[17] | 0x000000FF * opcode[16]
         @cpsr = (@cpsr & ~mask) | (x & mask)
       else
@@ -409,8 +391,40 @@ module RubyboyAdvance
       result
     end
 
-    def rot(x, n)
-      ((x >> n) | (x << (32 - n))) & 0xFFFF_FFFF
+    def lsl(x, n, s: false)
+      return x if n == 0
+
+      result = (x << n)
+      @shifter_carry = result[32] == 1 if s
+      result & 0xFFFF_FFFF
+    end
+
+    def lsr(x, n, s: false)
+      return x if n == 0
+
+      @shifter_carry = x[n - 1] == 1 if s
+      (x >> n) & 0xFFFF_FFFF
+    end
+
+    def asr(x, n, s: false)
+      return x if n == 0
+
+      @shifter_carry = uint_to_int(x)[n - 1] == 1 if s
+      (uint_to_int(x) >> n) & 0xFFFF_FFFF
+    end
+
+    def ror(x, n, s: false)
+      return x if n == 0
+
+      result = ((x >> (n & 0x1F)) | (x << (32 - (n & 0x1F)))) & 0xFFFF_FFFF
+      @shifter_carry = result[31] == 1 if s
+
+      result
+    end
+
+    def rrx(x, s: false)
+      @shifter_carry = x[0] == 1 if s
+      ((x >> 1) | (@cpsr[29] << 31)) & 0xFFFF_FFFF
     end
 
     def bx(rn)
