@@ -254,6 +254,19 @@ module RubyboyAdvance
 
         @regs[opcode[16..19]] = result
 
+      when :multiply_long
+        result = opcode[22] == 0 ? (reg(opcode[0..3]) * reg(opcode[8..11])) : (uint_to_int(reg(opcode[0..3])) * uint_to_int(reg(opcode[8..11])))
+
+        result += (reg(opcode[16..19]) << 32) | reg(opcode[12..15]) if opcode[21] == 1
+        result &= 0xFFFF_FFFF_FFFF_FFFF
+
+        @regs[opcode[16..19]] = result >> 32
+        @regs[opcode[12..15]] = result & 0xFFFF_FFFF
+
+        if opcode[20] == 1
+          self.flag_z = result == 0
+          self.flag_n = result[63] == 1
+        end
       when :halfword_data_transfer
         offset = opcode[22] == 0 ? reg(opcode[0..3]) : (opcode[8..11] << 4) | opcode[0..3]
         transfer(opcode, offset) do |addr|
