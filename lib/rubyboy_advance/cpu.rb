@@ -117,12 +117,18 @@ module RubyboyAdvance
         @regs[rn_index] = opcode[23] == 0 ? rn - (n << 2) : rn + (n << 2) if opcode[21] == 1
       when :data_processing
         s = opcode[20] == 1
-        rn = reg(opcode[16..19])
+        rn_index = opcode[16..19]
+        rn = reg(rn_index)
         @shifter_carry = nil
         op2 = if opcode[25] == 0
                 r = opcode[4]
                 n = r == 0 ? opcode[7..11] : reg(opcode[8..11]) & 0xFF
-                x = reg(opcode[0..3])
+                rm_index = opcode[0..3]
+                x = reg(rm_index)
+                if r == 1
+                  rn += 4 if rn_index == 15
+                  x += 4 if rm_index == 15
+                end
                 case opcode[5..6]
                 when 0b00
                   lsl(x, n, s:)
