@@ -82,5 +82,13 @@ RSpec.describe RubyboyAdvance::Bus do
       expect(bus.read32(0x0200_0002)).to eq(0x1234_5678)
       expect(bus.read(0x0200_0004)).to eq(0)
     end
+
+    it 'ignores the low bit of 16-bit addresses' do
+      bus.write16(0x0200_0001, 0xABCD)
+
+      expect(bus.read16(0x0200_0000)).to eq(0xABCD)
+      expect(bus.read16(0x0200_0001)).to eq(0xABCD)
+      expect(bus.read(0x0200_0002)).to eq(0)
+    end
   end
 end
