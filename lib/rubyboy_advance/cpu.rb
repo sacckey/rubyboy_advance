@@ -290,13 +290,18 @@ module RubyboyAdvance
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             @bus.write16(addr, value & 0xFFFF)
           when 0b101
-            @regs[opcode[12..15]] = @bus.read16(addr)
+            @regs[opcode[12..15]] = ror(@bus.read16(addr), (addr & 1) * 8)
           when 0b110
             v = @bus.read(addr)
             @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
           when 0b111
-            v = @bus.read16(addr)
-            @regs[opcode[12..15]] = v[15] == 1 ? v | 0xFFFF_0000 : v
+            if addr[0] == 1
+              v = @bus.read(addr)
+              @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
+            else
+              v = @bus.read16(addr)
+              @regs[opcode[12..15]] = v[15] == 1 ? v | 0xFFFF_0000 : v
+            end
           else
             raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
           end

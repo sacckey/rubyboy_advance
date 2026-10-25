@@ -48,10 +48,12 @@ module RubyboyAdvance
     end
 
     def read16(addr)
+      addr &= ~1
       read(addr) + (read(addr + 1) << 8)
     end
 
     def write16(addr, value)
+      addr &= ~1
       write(addr, value & 0xFF)
       write(addr + 1, (value >> 8) & 0xFF)
     end
