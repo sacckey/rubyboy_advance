@@ -33,6 +33,9 @@ module RubyboyAdvance
     end
 
     def exec
+      # Writes to r15 keep whatever value they were given; the CPU ignores the
+      # low bits, so align PC here once instead of at every instruction that sets it.
+      self.pc &= flag_t ? ~1 : ~3
       address = pc
 
       if flag_t
@@ -376,6 +379,7 @@ module RubyboyAdvance
         mask = 0xFF000000 * opcode[19] | 0x00FF0000 * opcode[18] | 0x0000FF00 * opcode[17] | 0x000000FF * opcode[16]
 
         if opcode[22] == 0
+          mask &= 0xFF00_0000 if user_mode? # User mode may only write the flags
           result = (@cpsr & ~mask) | (x & mask)
           update_banked_regs(to_cpu_mode(result))
           @cpsr = result
@@ -400,8 +404,9 @@ module RubyboyAdvance
       mode == :usr ? @cpsr : @spsrs[mode]
     end
 
-    def sys_mode?
-      @cpsr & 0x1F == 0x1F
+    # User and System share :usr registers, so privilege checks look at the raw mode bits.
+    def user_mode?
+      @cpsr & 0x1F == 0x10
     end
 
     def to_cpu_mode(value)
