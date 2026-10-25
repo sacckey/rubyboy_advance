@@ -253,6 +253,18 @@ module RubyboyAdvance
             opcode[22] == 0 ? @bus.write32(addr, value) : @bus.write(addr, value & 0xFF)
           end
         end
+      when :single_data_swap
+        rn_index = opcode[16..19]
+        rm_index = opcode[0..3]
+        rd_index = opcode[12..15]
+        is_byte = opcode[22] == 1
+
+        addr = reg(rn_index)
+        write_value = reg(rm_index)
+        read_value = is_byte ? @bus.read(addr) : ror(@bus.read32(addr), (addr & 3) * 8)
+        is_byte ? @bus.write(addr, write_value & 0xFF) : @bus.write32(addr, write_value)
+        @regs[rd_index] = read_value
+
       when :multiply
         case opcode[21]
         when 0
