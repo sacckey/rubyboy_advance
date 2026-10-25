@@ -106,7 +106,8 @@ module RubyboyAdvance
           next unless rlist[i] == 1
 
           if opcode[20] == 0
-            @bus.write32(current_address, @regs[i])
+            write_value = i == 15 ? reg(i) + 4 : reg(i)
+            @bus.write32(current_address, write_value)
           else
             @regs[i] = @bus.read32(current_address)
           end
