@@ -91,6 +91,7 @@ module RubyboyAdvance
         bx(rn)
       when :block_data_transfer
         rlist = opcode[0..15]
+        is_load = opcode[20] == 1
         n = 16.times.count { |i| rlist[i] == 1 }
         multiplicand = n == 0 ? 16 : n
         rn_index = opcode[16..19]
@@ -103,26 +104,33 @@ module RubyboyAdvance
           end
 
         current_address = start_address
+        new_rn = opcode[23] == 0 ? rn - (multiplicand << 2) : rn + (multiplicand << 2)
+        is_first = true
         if n == 0
-          if opcode[20] == 0 then @bus.write32(current_address, reg(15) + 4)
-          else @regs[15] = @bus.read32(current_address)
+          if is_load then @regs[15] = @bus.read32(current_address)
+          else @bus.write32(current_address, reg(15) + 4)
           end
         else
           16.times do |i|
             next unless rlist[i] == 1
 
-            if opcode[20] == 0
-              write_value = i == 15 ? reg(i) + 4 : reg(i)
-              @bus.write32(current_address, write_value)
-            else
+            if is_load
               @regs[i] = @bus.read32(current_address)
+            else
+              write_value = if i == rn_index && !is_first && opcode[21] == 1
+                              new_rn
+                            else
+                              i == 15 ? reg(i) + 4 : reg(i)
+                            end
+              @bus.write32(current_address, write_value)
             end
 
             current_address += 4
+            is_first = false
           end
         end
 
-        @regs[rn_index] = opcode[23] == 0 ? rn - (multiplicand << 2) : rn + (multiplicand << 2) if opcode[21] == 1
+        @regs[rn_index] = new_rn if opcode[21] == 1 && (!is_load || rlist[rn_index] == 0)
       when :data_processing
         s = opcode[20] == 1
         rn_index = opcode[16..19]
