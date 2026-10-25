@@ -145,7 +145,7 @@ module RubyboyAdvance
           ro_index = opcode[6..8]
           rb_index = opcode[3..5]
           rd_index = opcode[0..2]
-          addr = reg(rb_index) + reg(ro_index)
+          addr = (reg(rb_index) + reg(ro_index)) & 0xFFFF_FFFF
 
           if opcode[9] == 0
             case opcode[10..11]
@@ -319,18 +319,16 @@ module RubyboyAdvance
             raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
           end
         when 0xF
-          # Format 19: Long branch with link
-          upper = opcode[0..10]
-
-          opcode = @bus.read16(pc)
-          self.pc += 2
-
-          lower = opcode[0..10]
-          offset = (upper << 11) | lower
-          offset -= 0x40_0000 if offset[21] == 1
-
-          self.lr = pc | 1
-          self.pc = pc + (offset << 1)
+          # Format 19: Long branch with link. The two halves are separate instructions linked through LR
+          offset = opcode[0..10]
+          if opcode[11] == 0
+            offset -= 0x800 if offset[10] == 1
+            self.lr = (reg(15) + (offset << 12)) & 0xFFFF_FFFF
+          else
+            target = (lr + (offset << 1)) & 0xFFFF_FFFF
+            self.lr = pc | 1
+            self.pc = target
+          end
         end
 
         return 1
