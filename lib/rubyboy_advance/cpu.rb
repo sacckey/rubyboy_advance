@@ -96,6 +96,10 @@ module RubyboyAdvance
         multiplicand = n == 0 ? 16 : n
         rn_index = opcode[16..19]
         rn = @regs[rn_index]
+        from = current_cpu_mode
+
+        update_banked_regs(:usr) if opcode[22] == 1 && (!is_load || rlist[15] == 0)
+
         start_address =
           if opcode[24] == 0
             opcode[23] == 0 ? rn - (multiplicand << 2) + 4 : rn
@@ -131,6 +135,17 @@ module RubyboyAdvance
         end
 
         @regs[rn_index] = new_rn if opcode[21] == 1 && (!is_load || rlist[rn_index] == 0)
+
+        if opcode[22] == 1
+          if !is_load || rlist[15] == 0
+            update_banked_regs(from, :usr)
+          else
+            tmp = spsr(current_cpu_mode)
+            update_banked_regs(to_cpu_mode(tmp))
+            @cpsr = tmp
+          end
+        end
+
       when :data_processing
         s = opcode[20] == 1
         rn_index = opcode[16..19]
@@ -415,8 +430,8 @@ module RubyboyAdvance
       end
     end
 
-    def update_banked_regs(new_mode)
-      current_mode = current_cpu_mode
+    def update_banked_regs(new_mode, from = current_cpu_mode)
+      current_mode = from
 
       return if new_mode == current_mode
 
