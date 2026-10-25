@@ -42,41 +42,293 @@ module RubyboyAdvance
         opcode = @bus.read16(address)
         self.pc += 2
 
-        if opcode >> 13 == 0b001
+        case opcode >> 12
+        when 0x0, 0x1
+          rs = reg(opcode[3..5])
+          rd_index = opcode[0..2]
+
+          case opcode[11..12]
+          when 0b11
+            # Format 2: Add / subtract
+            immediate_value = opcode[6..8]
+
+            case opcode[9..10]
+            when 0b00 then @regs[rd_index] = add(rs, reg(immediate_value))
+            when 0b01 then @regs[rd_index] = sub(rs, reg(immediate_value))
+            when 0b10 then @regs[rd_index] = add(rs, immediate_value)
+            when 0b11 then @regs[rd_index] = sub(rs, immediate_value)
+            end
+          else
+            # Format 1: Move shifted register (LSL, LSR, ASR)
+            offset = opcode[6..10]
+            @shifter_carry = nil
+
+            case opcode[11..12]
+            when 0b00 then @regs[rd_index] = lsl(rs, offset, s: true)
+            when 0b01
+              offset = 32 if offset == 0
+              @regs[rd_index] = lsr(rs, offset, s: true)
+            when 0b10
+              offset = 32 if offset == 0
+              @regs[rd_index] = asr(rs, offset, s: true)
+            end
+
+            update_nz(@regs[rd_index])
+            self.flag_c = @shifter_carry unless @shifter_carry.nil?
+          end
+        when 0x2, 0x3
+          # Format 3: Move / compare / add / subtract immediate
           nn = opcode[0..7]
           rd = opcode[8..10]
           case opcode[11..12]
           when 0b00
             @regs[rd] = nn
-            self.flag_z = nn == 0
-            self.flag_n = nn[31] == 1
-          when 0b01
-            sub(reg(rd), nn)
-          when 0b10
-            @regs[rd] = add(reg(rd), nn)
-          when 0b11
-            @regs[rd] = sub(reg(rd), nn)
+            update_nz(nn)
+          when 0b01 then sub(reg(rd), nn)
+          when 0b10 then @regs[rd] = add(reg(rd), nn)
+          when 0b11 then @regs[rd] = sub(reg(rd), nn)
           end
-        elsif opcode >> 10 == 0b010001
-          rd = opcode[7] << 3 | opcode[0..2]
-          rs = (opcode[6] << 3) | opcode[3..5]
-
-          case opcode[8..9]
+        when 0x4
+          case opcode[10..11]
           when 0b00
-            @regs[rd] = (reg(rd) + reg(rs)) & 0xFFFF_FFFF
+            # Format 4: ALU operations
+            rs_index = opcode[3..5]
+            rs = reg(rs_index)
+            rd_index = opcode[0..2]
+            rd = reg(rd_index)
+            @shifter_carry = nil
+
+            case opcode[6..9]
+            when 0x0 then @regs[rd_index] = and32(rd, rs)
+            when 0x1 then @regs[rd_index] = xor(rd, rs)
+            when 0x2 then @regs[rd_index] = update_nz(lsl(rd, rs & 0xFF, s: true))
+            when 0x3 then @regs[rd_index] = update_nz(lsr(rd, rs & 0xFF, s: true))
+            when 0x4 then @regs[rd_index] = update_nz(asr(rd, rs & 0xFF, s: true))
+            when 0x5 then @regs[rd_index] = adc(rd, rs)
+            when 0x6 then @regs[rd_index] = sbc(rd, rs)
+            when 0x7 then @regs[rd_index] = update_nz(ror(rd, rs & 0xFF, s: true))
+            when 0x8 then and32(rd, rs)
+            when 0x9 then @regs[rd_index] = sub(0, rs)
+            when 0xA then sub(rd, rs)
+            when 0xB then add(rd, rs)
+            when 0xC then @regs[rd_index] = or32(rd, rs)
+            when 0xD then @regs[rd_index] = mul(rd, rs)
+            when 0xE then @regs[rd_index] = and32(rd, (~rs) & 0xFFFF_FFFF)
+            when 0xF then @regs[rd_index] = xor(rs, 0xFFFF_FFFF)
+            end
+
+            self.flag_c = @shifter_carry unless @shifter_carry.nil?
           when 0b01
-            sub(reg(rd), reg(rs))
-          when 0b10
-            @regs[rd] = reg(rs)
-          when 0b11
-            bx(reg(rs))
+            # Format 5: Hi register operations / branch exchange
+            rd = opcode[7] << 3 | opcode[0..2]
+            rs = (opcode[6] << 3) | opcode[3..5]
+
+            case opcode[8..9]
+            when 0b00
+              @regs[rd] = (reg(rd) + reg(rs)) & 0xFFFF_FFFF
+            when 0b01
+              sub(reg(rd), reg(rs))
+            when 0b10
+              @regs[rd] = reg(rs)
+            when 0b11
+              bx(reg(rs))
+            end
+          else
+            # Format 6: PC-relative load
+            rd_index = opcode[8..10]
+            offset = opcode[0..7] << 2
+
+            @regs[rd_index] = @bus.read32((reg(15) & ~2) + offset)
           end
-        elsif opcode >> 12 == 0b1010
+        when 0x5
+          # Format 7/8: Load / store with register offset (bit 9: 0 = format 7, 1 = format 8 sign-extended)
+          ro_index = opcode[6..8]
+          rb_index = opcode[3..5]
+          rd_index = opcode[0..2]
+          addr = (reg(rb_index) + reg(ro_index)) & 0xFFFF_FFFF
+
+          if opcode[9] == 0
+            case opcode[10..11]
+            when 0b00
+              @bus.write32(addr, reg(rd_index))
+            when 0b01
+              @bus.write(addr, reg(rd_index) & 0xFF)
+            when 0b10
+              @regs[rd_index] = ldr(addr)
+            when 0b11
+              @regs[rd_index] = @bus.read(addr)
+            end
+          else
+            case opcode[10..11]
+            when 0b00
+              @bus.write16(addr, reg(rd_index) & 0xFFFF)
+            when 0b01
+              @regs[rd_index] = ldrsb(addr)
+            when 0b10
+              @regs[rd_index] = ldrh(addr)
+            when 0b11
+              @regs[rd_index] = ldrsh(addr)
+            end
+          end
+        when 0x6, 0x7
+          # Format 9: Load / store with immediate offset
+          rb_index = opcode[3..5]
+          rd_index = opcode[0..2]
+          offset = opcode[6..10]
+          offset <<= 2 if opcode[12] == 0
+
+          addr = reg(rb_index) + offset
+
+          case opcode[11..12]
+          when 0b00
+            @bus.write32(addr, reg(rd_index))
+          when 0b01
+            @regs[rd_index] = ldr(addr)
+          when 0b10
+            @bus.write(addr, reg(rd_index) & 0xFF)
+          when 0b11
+            @regs[rd_index] = @bus.read(addr)
+          end
+        when 0x8
+          # Format 10: Load / store halfword
+          rb_index = opcode[3..5]
+          rd_index = opcode[0..2]
+          offset = opcode[6..10] << 1
+
+          addr = reg(rb_index) + offset
+
+          if opcode[11] == 0
+            @bus.write16(addr, reg(rd_index) & 0xFFFF)
+          else
+            @regs[rd_index] = ldrh(addr)
+          end
+        when 0x9
+          # Format 11: SP-relative load / store
+          rd_index = opcode[8..10]
+          offset = opcode[0..7] << 2
+
+          addr = sp + offset
+
+          if opcode[11] == 0
+            @bus.write32(addr, reg(rd_index))
+          else
+            @regs[rd_index] = ldr(addr)
+          end
+        when 0xA
+          # Format 12: Load address
           rd = opcode[8..10]
           nn = opcode[0..7]
           @regs[rd] = (opcode[11] == 0 ? reg(15) & ~2 : sp) + (nn << 2)
-        else
-          raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
+        when 0xB
+          case opcode[8..11]
+          when 0b0000
+            # Format 13: Add offset to stack pointer
+            offset = opcode[0..6] << 2
+            self.sp = (opcode[7] == 0 ? sp + offset : sp - offset) & 0xFFFF_FFFF
+          when 0b0100, 0b0101, 0b1100, 0b1101
+            # Format 14: Push / pop registers
+            rlist = opcode[0..7]
+            is_push = opcode[11] == 0
+            n = 8.times.count { |i| rlist[i] == 1 }
+            n += 1 if opcode[8] == 1
+
+            start_address = is_push ? sp - (n << 2) : sp
+            current_address = start_address
+            8.times do |i|
+              next unless rlist[i] == 1
+
+              if is_push
+                @bus.write32(current_address, reg(i))
+              else
+                @regs[i] = @bus.read32(current_address)
+              end
+              current_address += 4
+            end
+
+            if opcode[8] == 1
+              if is_push
+                @bus.write32(current_address, reg(14))
+              else
+                @regs[15] = @bus.read32(current_address)
+              end
+            end
+
+            self.sp = is_push ? start_address : sp + (n << 2)
+          end
+        when 0xC
+          # Format 15: Multiple load / store
+          rlist = opcode[0..7]
+          is_load = opcode[11] == 1
+          n = 8.times.count { |i| rlist[i] == 1 }
+          rb_index = opcode[8..10]
+          rb = reg(rb_index)
+
+          current_address = rb
+          new_rb = rb + (n << 2)
+          is_first = true
+          if n == 0
+            if is_load then @regs[15] = @bus.read32(current_address)
+            else @bus.write32(current_address, reg(15) + 2)
+            end
+            new_rb = rb + 0x40
+          else
+            8.times do |i|
+              next unless rlist[i] == 1
+
+              if is_load
+                @regs[i] = @bus.read32(current_address)
+              else
+                write_value = if i != rb_index
+                                reg(i)
+                              elsif is_first
+                                rb
+                              else
+                                new_rb
+                              end
+                @bus.write32(current_address, write_value)
+              end
+
+              current_address += 4
+              is_first = false
+            end
+          end
+
+          @regs[rb_index] = new_rb if !is_load || rlist[rb_index] == 0
+        when 0xD
+          case opcode[8..11]
+          when 0xE
+            raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
+          when 0xF
+            # Format 17: Software interrupt
+            swi(opcode[0..7])
+          else
+            return 1 unless executable?(opcode[8..11])
+
+            offset = opcode[0..7]
+            offset -= 0x100 if offset[7] == 1
+            self.pc = reg(15) + (offset << 1)
+          end
+        when 0xE
+          case opcode[11]
+          when 0
+            # Format 18: Unconditional branch
+            offset = opcode[0..10]
+            offset -= 0x800 if offset[10] == 1
+            self.pc = reg(15) + (offset << 1)
+          else
+            raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
+          end
+        when 0xF
+          # Format 19: Long branch with link. The two halves are separate instructions linked through LR
+          offset = opcode[0..10]
+          if opcode[11] == 0
+            offset -= 0x800 if offset[10] == 1
+            self.lr = (reg(15) + (offset << 12)) & 0xFFFF_FFFF
+          else
+            target = (lr + (offset << 1)) & 0xFFFF_FFFF
+            self.lr = pc | 1
+            self.pc = target
+          end
         end
 
         return 1
@@ -84,7 +336,7 @@ module RubyboyAdvance
 
       opcode = @bus.read32(address)
       self.pc += 4
-      return 1 unless executable?(opcode)
+      return 1 unless executable?(opcode >> 28)
 
       instruction = determine_instruction(opcode)
       case instruction
@@ -252,8 +504,7 @@ module RubyboyAdvance
                 self.flag_c = @shifter_carry
               end
             end
-            self.flag_z = result == 0
-            self.flag_n = result[31] == 1
+            update_nz(result)
           end
         end
 
@@ -281,7 +532,7 @@ module RubyboyAdvance
         transfer(opcode, offset) do |addr|
           rd = opcode[12..15]
           if opcode[20] == 1
-            @regs[rd] = opcode[22] == 0 ? ror(@bus.read32(addr), (addr & 3) * 8) : @bus.read(addr)
+            @regs[rd] = opcode[22] == 0 ? ldr(addr) : @bus.read(addr)
           else
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             opcode[22] == 0 ? @bus.write32(addr, value) : @bus.write(addr, value & 0xFF)
@@ -295,7 +546,7 @@ module RubyboyAdvance
 
         addr = reg(rn_index)
         write_value = reg(rm_index)
-        read_value = is_byte ? @bus.read(addr) : ror(@bus.read32(addr), (addr & 3) * 8)
+        read_value = is_byte ? @bus.read(addr) : ldr(addr)
         is_byte ? @bus.write(addr, write_value & 0xFF) : @bus.write32(addr, write_value)
         @regs[rd_index] = read_value
 
@@ -307,10 +558,7 @@ module RubyboyAdvance
           result = (reg(opcode[0..3]) * reg(opcode[8..11]) + reg(opcode[12..15])) & 0xFFFF_FFFF
         end
 
-        if opcode[20] == 1
-          self.flag_z = result == 0
-          self.flag_n = result[31] == 1
-        end
+        update_nz(result) if opcode[20] == 1
 
         @regs[opcode[16..19]] = result
 
@@ -335,19 +583,9 @@ module RubyboyAdvance
             rd = opcode[12..15]
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             @bus.write16(addr, value & 0xFFFF)
-          when 0b101
-            @regs[opcode[12..15]] = ror(@bus.read16(addr), (addr & 1) * 8)
-          when 0b110
-            v = @bus.read(addr)
-            @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
-          when 0b111
-            if addr[0] == 1
-              v = @bus.read(addr)
-              @regs[opcode[12..15]] = v[7] == 1 ? v | 0xFFFF_FF00 : v
-            else
-              v = @bus.read16(addr)
-              @regs[opcode[12..15]] = v[15] == 1 ? v | 0xFFFF_0000 : v
-            end
+          when 0b101 then @regs[opcode[12..15]] = ldrh(addr)
+          when 0b110 then @regs[opcode[12..15]] = ldrsb(addr)
+          when 0b111 then @regs[opcode[12..15]] = ldrsh(addr)
           else
             raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
           end
@@ -358,21 +596,7 @@ module RubyboyAdvance
         self.lr = pc if opcode[24] == 1
 
         self.pc = reg(15) + (offset << 2)
-      when :software_interrupt
-        case opcode[16..23]
-        when 6
-          raise 'Division by zero' if @regs[1] == 0
-
-          regs0 = uint_to_int(@regs[0])
-          regs1 = uint_to_int(@regs[1])
-
-          rem = regs0.remainder(regs1)
-          @regs[0] = int_to_uint((regs0 - rem) / regs1)
-          @regs[1] = int_to_uint(rem)
-          @regs[3] = (regs0.abs / regs1.abs)
-        else
-          raise format('Unknown software interrupt %<opcode>08X at %<address>08X', opcode:, address:)
-        end
+      when :software_interrupt then swi(opcode[16..23])
       when :mrs then @regs[opcode[12..15]] = opcode[22] == 0 ? @cpsr : spsr(current_cpu_mode)
       when :msr
         x = opcode[25] == 0 ? reg(opcode[0..3]) : ror(opcode[0..7], opcode[8..11] * 2)
@@ -395,6 +619,23 @@ module RubyboyAdvance
     end
 
     private
+
+    def swi(number)
+      case number
+      when 6
+        raise 'Division by zero' if @regs[1] == 0
+
+        regs0 = uint_to_int(@regs[0])
+        regs1 = uint_to_int(@regs[1])
+
+        rem = regs0.remainder(regs1)
+        @regs[0] = int_to_uint((regs0 - rem) / regs1)
+        @regs[1] = int_to_uint(rem)
+        @regs[3] = (regs0.abs / regs1.abs)
+      else
+        raise format('Unknown software interrupt %<number>02X', number:)
+      end
+    end
 
     def current_cpu_mode
       to_cpu_mode(@cpsr)
@@ -531,11 +772,28 @@ module RubyboyAdvance
       @cpsr = value ? @cpsr | (1 << 28) : @cpsr & ~(1 << 28)
     end
 
+    def update_nz(result)
+      self.flag_z = result == 0
+      self.flag_n = result[31] == 1
+
+      result
+    end
+
     def add(x, y)
       tmp = x + y
       result = tmp & 0xFFFF_FFFF
-      self.flag_z = result == 0
-      self.flag_n = result[31] == 1
+      update_nz(result)
+      self.flag_c = (tmp > 0xFFFF_FFFF)
+      self.flag_v = ((x ^ result) & (y ^ result))[31] == 1
+
+      result
+    end
+
+    def adc(x, y)
+      c = @cpsr[29]
+      tmp = x + y + c
+      result = tmp & 0xFFFF_FFFF
+      update_nz(result)
       self.flag_c = (tmp > 0xFFFF_FFFF)
       self.flag_v = ((x ^ result) & (y ^ result))[31] == 1
 
@@ -544,12 +802,38 @@ module RubyboyAdvance
 
     def sub(x, y)
       result = (x - y) & 0xFFFF_FFFF
-      self.flag_z = result == 0
-      self.flag_n = result[31] == 1
+      update_nz(result)
       self.flag_c = (x >= y)
       self.flag_v = ((x ^ y) & (x ^ result))[31] == 1
 
       result
+    end
+
+    def sbc(x, y)
+      c = @cpsr[29]
+      tmp = x - y - (1 - c)
+      result = tmp & 0xFFFF_FFFF
+      update_nz(result)
+      self.flag_c = (x >= y + (1 - c))
+      self.flag_v = ((x ^ y) & (x ^ result))[31] == 1
+
+      result
+    end
+
+    def mul(x, y)
+      update_nz((x * y) & 0xFFFF_FFFF)
+    end
+
+    def and32(x, y)
+      update_nz(x & y)
+    end
+
+    def or32(x, y)
+      update_nz(x | y)
+    end
+
+    def xor(x, y)
+      update_nz(x ^ y)
     end
 
     def lsl(x, n, s: false)
@@ -557,6 +841,7 @@ module RubyboyAdvance
 
       result = (x << n)
       @shifter_carry = result[32] == 1 if s
+
       result & 0xFFFF_FFFF
     end
 
@@ -588,6 +873,28 @@ module RubyboyAdvance
       ((x >> 1) | (@cpsr[29] << 31)) & 0xFFFF_FFFF
     end
 
+    # Loads from a misaligned address rotate the aligned word/halfword
+    def ldr(addr)
+      ror(@bus.read32(addr), (addr & 3) * 8)
+    end
+
+    def ldrh(addr)
+      ror(@bus.read16(addr), (addr & 1) * 8)
+    end
+
+    def ldrsb(addr)
+      v = @bus.read(addr)
+      v[7] == 1 ? v | 0xFFFF_FF00 : v
+    end
+
+    # An odd address loads only the byte, sign-extended
+    def ldrsh(addr)
+      return ldrsb(addr) if addr[0] == 1
+
+      v = @bus.read16(addr)
+      v[15] == 1 ? v | 0xFFFF_0000 : v
+    end
+
     def bx(rn)
       self.pc = if rn[0] == 1
                   self.flag_t = true
@@ -598,8 +905,8 @@ module RubyboyAdvance
                 end
     end
 
-    def executable?(opcode)
-      case opcode >> 28
+    def executable?(nibble)
+      case nibble
       when 0x0 then flag_z
       when 0x1 then !flag_z
       when 0x2 then flag_c
