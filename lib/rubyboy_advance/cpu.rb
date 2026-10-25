@@ -92,30 +92,37 @@ module RubyboyAdvance
       when :block_data_transfer
         rlist = opcode[0..15]
         n = 16.times.count { |i| rlist[i] == 1 }
+        multiplicand = n == 0 ? 16 : n
         rn_index = opcode[16..19]
         rn = @regs[rn_index]
         start_address =
           if opcode[24] == 0
-            opcode[23] == 0 ? rn - (n << 2) + 4 : rn
+            opcode[23] == 0 ? rn - (multiplicand << 2) + 4 : rn
           else
-            opcode[23] == 0 ? rn - (n << 2) : rn + 4
+            opcode[23] == 0 ? rn - (multiplicand << 2) : rn + 4
           end
 
         current_address = start_address
-        16.times do |i|
-          next unless rlist[i] == 1
-
-          if opcode[20] == 0
-            write_value = i == 15 ? reg(i) + 4 : reg(i)
-            @bus.write32(current_address, write_value)
-          else
-            @regs[i] = @bus.read32(current_address)
+        if n == 0
+          if opcode[20] == 0 then @bus.write32(current_address, reg(15) + 4)
+          else @regs[15] = @bus.read32(current_address)
           end
+        else
+          16.times do |i|
+            next unless rlist[i] == 1
 
-          current_address += 4
+            if opcode[20] == 0
+              write_value = i == 15 ? reg(i) + 4 : reg(i)
+              @bus.write32(current_address, write_value)
+            else
+              @regs[i] = @bus.read32(current_address)
+            end
+
+            current_address += 4
+          end
         end
 
-        @regs[rn_index] = opcode[23] == 0 ? rn - (n << 2) : rn + (n << 2) if opcode[21] == 1
+        @regs[rn_index] = opcode[23] == 0 ? rn - (multiplicand << 2) : rn + (multiplicand << 2) if opcode[21] == 1
       when :data_processing
         s = opcode[20] == 1
         rn_index = opcode[16..19]
