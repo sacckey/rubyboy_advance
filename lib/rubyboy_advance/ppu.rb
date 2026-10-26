@@ -85,8 +85,9 @@ module RubyboyAdvance
       @oam[addr & 0x3FF] = value
     end
 
+    # Decided before mirroring: byte writes to the 0x06018000- mirror are ignored
     def bg_vram?(addr)
-      vram_index(addr) < (read_io16(0) & 0x7 >= 3 ? 0x14000 : 0x10000)
+      (addr & 0x1FFFF) < (read_io16(0) & 0x7 >= 3 ? 0x14000 : 0x10000)
     end
 
     private

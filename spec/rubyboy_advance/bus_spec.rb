@@ -84,10 +84,11 @@ RSpec.describe RubyboyAdvance::Bus do
         expect(bus.read16(0x0601_4000)).to eq(0)
       end
 
-      it 'decides the area after mirroring' do
+      it 'ignores the mirror of BG VRAM at 0x06018000' do
+        bus.write16(0x0601_0000, 0x1234)
         bus.write(0x0601_8001, 0xAB)
 
-        expect(bus.read16(0x0601_0000)).to eq(0xABAB)
+        expect(bus.read16(0x0601_0000)).to eq(0x1234)
       end
     end
   end
