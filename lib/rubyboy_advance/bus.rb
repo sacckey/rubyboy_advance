@@ -24,7 +24,7 @@ module RubyboyAdvance
       when 0x05 then return @ppu.read_palram(addr)
       when 0x06 then return @ppu.read_vram(addr)
       when 0x07 then return @ppu.read_oam(addr)
-      when 0x08, 0x09 then return @rom[addr & 0x1FFFFFF] || 0
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D then return @rom[addr & 0x1FFFFFF] || 0
       when 0x0E then return @cartram[addr & 0xFFFF]
       end
 
@@ -32,6 +32,39 @@ module RubyboyAdvance
     end
 
     def write(addr, value)
+      case addr >> 24
+      when 0x05 then write16(addr, value * 0x0101)
+      when 0x06 then write16(addr, value * 0x0101) if @ppu.bg_vram?(addr)
+      when 0x07 then nil
+      else write8(addr, value)
+      end
+    end
+
+    def read16(addr)
+      addr &= ~1
+      read(addr) + (read(addr + 1) << 8)
+    end
+
+    def write16(addr, value)
+      addr &= ~1
+      write8(addr, value & 0xFF)
+      write8(addr + 1, (value >> 8) & 0xFF)
+    end
+
+    def read32(addr)
+      addr &= ~3
+      read16(addr) + (read16(addr + 2) << 16)
+    end
+
+    def write32(addr, value)
+      addr &= ~3
+      write16(addr, value & 0xFFFF)
+      write16(addr + 2, (value >> 16) & 0xFFFF)
+    end
+
+    private
+
+    def write8(addr, value)
       case addr >> 24
       when 0x02 then @ewram[addr & 0x3FFFF] = value
       when 0x03 then @iwram[addr & 0x7FFF] = value
@@ -45,28 +78,6 @@ module RubyboyAdvance
       end
 
       nil
-    end
-
-    def read16(addr)
-      addr &= ~1
-      read(addr) + (read(addr + 1) << 8)
-    end
-
-    def write16(addr, value)
-      addr &= ~1
-      write(addr, value & 0xFF)
-      write(addr + 1, (value >> 8) & 0xFF)
-    end
-
-    def read32(addr)
-      addr &= ~3
-      read16(addr) + (read16(addr + 2) << 16)
-    end
-
-    def write32(addr, value)
-      addr &= ~3
-      write16(addr, value & 0xFFFF)
-      write16(addr + 2, (value >> 16) & 0xFFFF)
     end
   end
 end

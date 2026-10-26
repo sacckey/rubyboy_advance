@@ -85,6 +85,10 @@ module RubyboyAdvance
       @oam[addr & 0x3FF] = value
     end
 
+    def bg_vram?(addr)
+      vram_index(addr) < (read_io16(0) & 0x7 >= 3 ? 0x14000 : 0x10000)
+    end
+
     private
 
     def vcount

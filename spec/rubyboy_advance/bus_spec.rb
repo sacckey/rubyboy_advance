@@ -12,33 +12,83 @@ RSpec.describe RubyboyAdvance::Bus do
     'cartridge RAM' => [0x0E00_0000]
   }.each do |name, (addr, mirror)|
     describe name do
-      it 'reads back a written byte' do
-        bus.write(addr, 0xAB)
+      it 'reads back a written halfword' do
+        bus.write16(addr, 0xABCD)
 
-        expect(bus.read(addr)).to eq(0xAB)
+        expect(bus.read16(addr)).to eq(0xABCD)
       end
 
       next unless mirror
 
-      it 'reads the same byte through its mirror' do
-        bus.write(addr, 0xAB)
+      it 'reads the same halfword through its mirror' do
+        bus.write16(addr, 0xABCD)
 
-        expect(bus.read(mirror)).to eq(0xAB)
+        expect(bus.read16(mirror)).to eq(0xABCD)
       end
     end
   end
 
   describe 'VRAM' do
     it 'mirrors the last 32 KB onto the 32 KB before it' do
-      bus.write(0x0601_0000, 0xAB)
+      bus.write16(0x0601_0000, 0xABCD)
 
-      expect(bus.read(0x0601_8000)).to eq(0xAB)
+      expect(bus.read16(0x0601_8000)).to eq(0xABCD)
     end
 
     it 'mirrors every 128 KB' do
-      bus.write(0x0600_8000, 0xAB)
+      bus.write16(0x0600_8000, 0xABCD)
 
-      expect(bus.read(0x0602_8000)).to eq(0xAB)
+      expect(bus.read16(0x0602_8000)).to eq(0xABCD)
+    end
+  end
+
+  describe 'byte writes to video memory' do
+    it 'ignores OAM' do
+      bus.write(0x0700_0010, 0xAB)
+
+      expect(bus.read16(0x0700_0010)).to eq(0)
+    end
+
+    it 'writes the byte to both halves of a palette halfword' do
+      bus.write(0x0500_0021, 0xAB)
+
+      expect(bus.read16(0x0500_0020)).to eq(0xABAB)
+    end
+
+    context 'in tiled modes' do
+      it 'writes the byte to both halves of a BG VRAM halfword' do
+        bus.write(0x0600_FFFF, 0xAB)
+
+        expect(bus.read16(0x0600_FFFE)).to eq(0xABAB)
+      end
+
+      it 'ignores OBJ VRAM from 0x06010000' do
+        bus.write(0x0601_0000, 0xAB)
+
+        expect(bus.read16(0x0601_0000)).to eq(0)
+      end
+    end
+
+    context 'in bitmap modes' do
+      before { bus.write16(0x0400_0000, 3) }
+
+      it 'treats VRAM up to 0x06013FFF as BG' do
+        bus.write(0x0601_3FFF, 0xAB)
+
+        expect(bus.read16(0x0601_3FFE)).to eq(0xABAB)
+      end
+
+      it 'ignores OBJ VRAM from 0x06014000' do
+        bus.write(0x0601_4000, 0xAB)
+
+        expect(bus.read16(0x0601_4000)).to eq(0)
+      end
+
+      it 'decides the area after mirroring' do
+        bus.write(0x0601_8001, 0xAB)
+
+        expect(bus.read16(0x0601_0000)).to eq(0xABAB)
+      end
     end
   end
 
@@ -55,6 +105,15 @@ RSpec.describe RubyboyAdvance::Bus do
 
     it 'reads 0 past the end of the ROM' do
       expect(bus.read(0x0800_0004)).to eq(0)
+    end
+
+    it 'mirrors the ROM at 0x0A000000 and 0x0C000000' do
+      expect(bus.read(0x0A00_0003)).to eq(0x12)
+      expect(bus.read(0x0C00_0003)).to eq(0x12)
+    end
+
+    it 'maps 32 MB at each mirror' do
+      expect([0x0900_0000, 0x0B00_0000, 0x0D00_0000].map { bus.read(it) }).to eq([0, 0, 0])
     end
   end
 
