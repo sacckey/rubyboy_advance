@@ -25,6 +25,27 @@ module RubyboyAdvance
           res = true
           dispcnt = read_io16(0)
           case dispcnt & 0x7
+          when 0
+            if dispcnt[8] == 0
+              @buffer.fill(@palram[0] | (@palram[1] << 8)) # BG0 off: only the backdrop is left
+            else
+              bg0cnt = read_io16(8)
+              char_base = bg0cnt[2..3] << 14
+              map_base  = bg0cnt[8..12] << 11
+              160.times do |y|
+                240.times do |x|
+                  tile_map_index = map_base + ((((y >> 3) << 5) + (x >> 3)) << 1)
+                  tile_map = @vram[tile_map_index] | (@vram[tile_map_index + 1] << 8)
+                  palette_index = tile_map >> 12
+                  tile_index = tile_map & 0x03FF
+                  pixel_index = char_base + (tile_index << 5) + ((y & 7) << 2) + ((x & 7) >> 1)
+                  pixel = @vram[pixel_index]
+                  color = x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+                  i = color == 0 ? 0 : ((palette_index << 4) + color) << 1
+                  @buffer[y * 240 + x] = @palram[i] | (@palram[i + 1] << 8)
+                end
+              end
+            end
           when 3
             (160 * 240).times do |i|
               @buffer[i] = @vram[i << 1] | (@vram[(i << 1) + 1] << 8)
