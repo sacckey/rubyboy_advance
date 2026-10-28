@@ -10,7 +10,7 @@ module RubyboyAdvance
       @iwram = Array.new(0x8000, 0)
       @ioram = Array.new(0x400, 0)
       @rom = rom
-      @cartram = Array.new(0x10000, 0)
+      @cartram = Array.new(0x10000, 0xFF)
       @ppu = ppu
     end
 
@@ -25,7 +25,7 @@ module RubyboyAdvance
       when 0x06 then return @ppu.read_vram(addr)
       when 0x07 then return @ppu.read_oam(addr)
       when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D then return @rom[addr & 0x1FFFFFF] || 0
-      when 0x0E then return @cartram[addr & 0xFFFF]
+      when 0x0E, 0x0F then return @cartram[addr & 0xFFFF]
       end
 
       0xff
@@ -41,25 +41,41 @@ module RubyboyAdvance
     end
 
     def read16(addr)
-      addr &= ~1
-      read(addr) + (read(addr + 1) << 8)
+      case addr >> 24
+      when 0x0E, 0x0F then read(addr) * 0x0101
+      else
+        addr &= ~1
+        read(addr) + (read(addr + 1) << 8)
+      end
     end
 
     def write16(addr, value)
-      addr &= ~1
-      write8(addr, value & 0xFF)
-      write8(addr + 1, (value >> 8) & 0xFF)
+      case addr >> 24
+      when 0x0E, 0x0F then write8(addr, (value >> ((addr & 1) << 3)) & 0xFF)
+      else
+        addr &= ~1
+        write8(addr, value & 0xFF)
+        write8(addr + 1, (value >> 8) & 0xFF)
+      end
     end
 
     def read32(addr)
-      addr &= ~3
-      read16(addr) + (read16(addr + 2) << 16)
+      case addr >> 24
+      when 0x0E, 0x0F then read(addr) * 0x0101_0101
+      else
+        addr &= ~3
+        read16(addr) + (read16(addr + 2) << 16)
+      end
     end
 
     def write32(addr, value)
-      addr &= ~3
-      write16(addr, value & 0xFFFF)
-      write16(addr + 2, (value >> 16) & 0xFFFF)
+      case addr >> 24
+      when 0x0E, 0x0F then write8(addr, (value >> ((addr & 3) << 3)) & 0xFF)
+      else
+        addr &= ~3
+        write16(addr, value & 0xFFFF)
+        write16(addr + 2, (value >> 16) & 0xFFFF)
+      end
     end
 
     private
@@ -74,7 +90,7 @@ module RubyboyAdvance
       when 0x05 then @ppu.write_palram(addr, value)
       when 0x06 then @ppu.write_vram(addr, value)
       when 0x07 then @ppu.write_oam(addr, value)
-      when 0x0E then @cartram[addr & 0xFFFF] = value
+      when 0x0E, 0x0F then @cartram[addr & 0xFFFF] = value
       end
 
       nil

@@ -8,8 +8,7 @@ RSpec.describe RubyboyAdvance::Bus do
     'IWRAM' => [0x0300_0000, 0x0300_8000],
     'I/O' => [0x0400_0000],
     'palette RAM' => [0x0500_0000, 0x0500_0400],
-    'OAM' => [0x0700_0000, 0x0700_0400],
-    'cartridge RAM' => [0x0E00_0000]
+    'OAM' => [0x0700_0000, 0x0700_0400]
   }.each do |name, (addr, mirror)|
     describe name do
       it 'reads back a written halfword' do
@@ -115,6 +114,38 @@ RSpec.describe RubyboyAdvance::Bus do
 
     it 'maps 32 MB at each mirror' do
       expect([0x0900_0000, 0x0B00_0000, 0x0D00_0000].map { bus.read(it) }).to eq([0, 0, 0])
+    end
+  end
+
+  describe 'cartridge RAM' do
+    it 'reads 0xFF before anything is written' do
+      expect(bus.read(0x0E00_0000)).to eq(0xFF)
+    end
+
+    it 'mirrors every 64 KB and at 0x0F000000' do
+      bus.write(0x0E00_0000, 0xAB)
+
+      expect([0x0E01_0000, 0x0F00_0000].map { bus.read(it) }).to eq([0xAB, 0xAB])
+    end
+
+    it 'repeats the byte at the address on 16- and 32-bit reads' do
+      bus.write(0x0E00_0003, 0xAB)
+
+      expect(bus.read16(0x0E00_0003)).to eq(0xABAB)
+      expect(bus.read32(0x0E00_0003)).to eq(0xABAB_ABAB)
+    end
+
+    it 'writes only the byte for the address on 16-bit writes' do
+      bus.write16(0x0E00_0000, 0xAABB)
+      bus.write16(0x0E00_0011, 0xAABB)
+
+      expect([0x00, 0x01, 0x10, 0x11].map { bus.read(0x0E00_0000 + it) }).to eq([0xBB, 0xFF, 0xFF, 0xAA])
+    end
+
+    it 'writes only the byte for the address on 32-bit writes' do
+      bus.write32(0x0E00_0002, 0xAABB_CCDD)
+
+      expect([0, 1, 2, 3].map { bus.read(0x0E00_0000 + it) }).to eq([0xFF, 0xFF, 0xBB, 0xFF])
     end
   end
 
