@@ -41,12 +41,11 @@ module RubyboyAdvance
     end
 
     def read16(addr)
-      addr &= ~1
       case addr >> 24
-      when 0x0E, 0x0F
-        byte = read(addr)
-        (byte << 8) | byte
-      else read(addr) + (read(addr + 1) << 8)
+      when 0x0E, 0x0F then read(addr) * 0x0101
+      else
+        addr &= ~1
+        read(addr) + (read(addr + 1) << 8)
       end
     end
 
@@ -61,12 +60,11 @@ module RubyboyAdvance
     end
 
     def read32(addr)
-      addr &= ~3
       case addr >> 24
-      when 0x0E, 0x0F
-        byte = read(addr)
-        (byte << 24) | (byte << 16) | (byte << 8) | byte
-      else read16(addr) + (read16(addr + 2) << 16)
+      when 0x0E, 0x0F then read(addr) * 0x0101_0101
+      else
+        addr &= ~3
+        read16(addr) + (read16(addr + 2) << 16)
       end
     end
 

@@ -128,11 +128,11 @@ RSpec.describe RubyboyAdvance::Bus do
       expect([0x0E01_0000, 0x0F00_0000].map { bus.read(it) }).to eq([0xAB, 0xAB])
     end
 
-    it 'repeats the byte on 16- and 32-bit reads' do
-      bus.write(0x0E00_0000, 0xAB)
+    it 'repeats the byte at the address on 16- and 32-bit reads' do
+      bus.write(0x0E00_0003, 0xAB)
 
-      expect(bus.read16(0x0E00_0000)).to eq(0xABAB)
-      expect(bus.read32(0x0E00_0000)).to eq(0xABAB_ABAB)
+      expect(bus.read16(0x0E00_0003)).to eq(0xABAB)
+      expect(bus.read32(0x0E00_0003)).to eq(0xABAB_ABAB)
     end
 
     it 'writes only the byte for the address on 16-bit writes' do
