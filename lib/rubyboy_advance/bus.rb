@@ -5,12 +5,12 @@ module RubyboyAdvance
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 
-    def initialize(rom, ppu)
+    def initialize(rom, ppu, cartram)
       @ewram = Array.new(0x40000, 0)
       @iwram = Array.new(0x8000, 0)
       @ioram = Array.new(0x400, 0)
       @rom = rom
-      @cartram = Array.new(0x10000, 0xFF)
+      @cartram = cartram
       @ppu = ppu
     end
 
@@ -25,7 +25,7 @@ module RubyboyAdvance
       when 0x06 then return @ppu.read_vram(addr)
       when 0x07 then return @ppu.read_oam(addr)
       when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D then return @rom[addr & 0x1FFFFFF] || 0
-      when 0x0E, 0x0F then return @cartram[addr & 0xFFFF]
+      when 0x0E, 0x0F then return @cartram.read(addr & 0xFFFF)
       end
 
       0xff
@@ -90,7 +90,7 @@ module RubyboyAdvance
       when 0x05 then @ppu.write_palram(addr, value)
       when 0x06 then @ppu.write_vram(addr, value)
       when 0x07 then @ppu.write_oam(addr, value)
-      when 0x0E, 0x0F then @cartram[addr & 0xFFFF] = value
+      when 0x0E, 0x0F then @cartram.write(addr & 0xFFFF, value)
       end
 
       nil

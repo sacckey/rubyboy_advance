@@ -8,7 +8,8 @@ abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
 
 rom = File.binread(ARGV[0]).bytes
 ppu = RubyboyAdvance::Ppu.new
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu))
+cartram = rom.pack('C*').match?(/FLASH\w*_V/) ? RubyboyAdvance::Flash.new : RubyboyAdvance::Sram.new
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu, cartram))
 lcd = RubyboyAdvance::Lcd.new
 begin
   loop do
