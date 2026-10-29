@@ -2,7 +2,7 @@
 
 RSpec.describe RubyboyAdvance::Ppu do
   let(:ppu) { described_class.new }
-  let(:bus) { RubyboyAdvance::Bus.new([], ppu) }
+  let(:bus) { RubyboyAdvance::Bus.new([], ppu, RubyboyAdvance::Sram.new) }
 
   describe 'mode 0' do
     it 'draws BG0 with the tile palette bank and shows the backdrop for color 0' do
