@@ -8,7 +8,12 @@ abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
 
 rom = File.binread(ARGV[0]).bytes
 ppu = RubyboyAdvance::Ppu.new
-cartram = rom.pack('C*').match?(/FLASH\w*_V/) ? RubyboyAdvance::Flash.new : RubyboyAdvance::Sram.new
+cartram =
+  case rom.pack('C*')
+  when /FLASH1M_V/ then RubyboyAdvance::Flash128.new
+  when /FLASH\w*_V/ then RubyboyAdvance::Flash.new
+  else RubyboyAdvance::Sram.new
+  end
 cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu, cartram))
 lcd = RubyboyAdvance::Lcd.new
 begin
