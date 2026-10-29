@@ -2,6 +2,9 @@
 
 module RubyboyAdvance
   class Flash128
+    # Maker and device ID of a Sanyo chip, as mGBA reports
+    ID = [0x62, 0x13].freeze
+
     def initialize
       @ram = Array.new(0x20000, 0xFF)
       @bank = 0
@@ -10,7 +13,7 @@ module RubyboyAdvance
     end
 
     def read(addr)
-      @ram[ram_offset(addr)]
+      @command == 0x90 && addr < 2 ? ID[addr] : @ram[ram_offset(addr)]
     end
 
     def write(addr, value)

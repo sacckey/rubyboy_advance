@@ -2,6 +2,9 @@
 
 module RubyboyAdvance
   class Flash
+    # Maker and device ID of a Panasonic chip, as mGBA reports
+    ID = [0x32, 0x1B].freeze
+
     def initialize
       @ram = Array.new(0x10000, 0xFF)
       @command = 0
@@ -9,7 +12,7 @@ module RubyboyAdvance
     end
 
     def read(addr)
-      @ram[addr]
+      @command == 0x90 && addr < 2 ? ID[addr] : @ram[addr]
     end
 
     def write(addr, value)
