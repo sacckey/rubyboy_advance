@@ -37,5 +37,9 @@ module RubyboyAdvance
       when 0x209 then @ime = (@ime & 0xFF) | (value << 8)
       end
     end
+
+    def irq?
+      @ime[0] == 1 && (@if & @ie) != 0
+    end
   end
 end

@@ -33,4 +33,15 @@ RSpec.describe RubyboyAdvance::Ppu do
       expect { ppu.step(1232 * 228) }.to change { ppu.buffer[0] }.from(0x3333).to(0x1111)
     end
   end
+
+  describe 'VBlank interrupt' do
+    it 'is requested only when DISPSTAT bit 3 is set' do
+      ppu.step(1232 * 228)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+
+      bus.write16(0x0400_0004, 0x0008) # DISPSTAT: VBlank IRQ on
+      ppu.step(1232 * 228)
+      expect(bus.read16(0x0400_0202)).to eq(1)
+    end
+  end
 end

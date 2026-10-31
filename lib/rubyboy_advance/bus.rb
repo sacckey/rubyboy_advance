@@ -2,6 +2,8 @@
 
 module RubyboyAdvance
   class Bus
+    attr_reader :interrupt
+
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 

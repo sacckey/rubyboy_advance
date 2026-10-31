@@ -150,6 +150,25 @@ RSpec.describe RubyboyAdvance::Bus do
     end
   end
 
+  describe 'interrupt registers' do
+    it 'reads back IE and IME' do
+      bus.write16(0x0400_0200, 0x2001)
+      bus.write16(0x0400_0208, 1)
+
+      expect([bus.read16(0x0400_0200), bus.read16(0x0400_0208)]).to eq([0x2001, 1])
+    end
+
+    it 'clears only the IF bits written as 1, in both bytes' do
+      interrupt.instance_variable_set(:@if, 0x2001)
+
+      bus.write16(0x0400_0202, 0x0001)
+      expect(bus.read16(0x0400_0202)).to eq(0x2000)
+
+      bus.write16(0x0400_0202, 0x2000)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+    end
+  end
+
   it 'reads 0xFF from unmapped addresses' do
     expect(bus.read(0x0000_0000)).to eq(0xFF)
   end

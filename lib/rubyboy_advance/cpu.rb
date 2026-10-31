@@ -30,12 +30,23 @@ module RubyboyAdvance
       @sps = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @lrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @bus = bus
+      @interrupt = @bus.interrupt
     end
 
     def exec
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
       self.pc &= flag_t ? ~1 : ~3
+
+      if @interrupt.irq? && @cpsr[7] == 0
+        @spsrs[:irq] = @cpsr
+        update_banked_regs(:irq)
+        self.lr = pc + 4
+        @cpsr = (@cpsr & ~0x3F) | 0x80 | 0x12
+        self.pc = 0x18
+        return 1
+      end
+
       address = pc
 
       if flag_t
