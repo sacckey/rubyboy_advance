@@ -311,7 +311,7 @@ module RubyboyAdvance
             raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
           when 0xF
             # Format 17: Software interrupt
-            swi(opcode[0..7])
+            swi
           else
             return 1 unless executable?(opcode[8..11])
 
@@ -607,7 +607,7 @@ module RubyboyAdvance
         self.lr = pc if opcode[24] == 1
 
         self.pc = reg(15) + (offset << 2)
-      when :software_interrupt then swi(opcode[16..23])
+      when :software_interrupt then swi
       when :mrs then @regs[opcode[12..15]] = opcode[22] == 0 ? @cpsr : spsr(current_cpu_mode)
       when :msr
         x = opcode[25] == 0 ? reg(opcode[0..3]) : ror(opcode[0..7], opcode[8..11] * 2)
@@ -631,21 +631,12 @@ module RubyboyAdvance
 
     private
 
-    def swi(number)
-      case number
-      when 6
-        raise 'Division by zero' if @regs[1] == 0
-
-        regs0 = uint_to_int(@regs[0])
-        regs1 = uint_to_int(@regs[1])
-
-        rem = regs0.remainder(regs1)
-        @regs[0] = int_to_uint((regs0 - rem) / regs1)
-        @regs[1] = int_to_uint(rem)
-        @regs[3] = (regs0.abs / regs1.abs)
-      else
-        raise format('Unknown software interrupt %<number>02X', number:)
-      end
+    def swi
+      @spsrs[:svc] = @cpsr
+      update_banked_regs(:svc)
+      self.lr = pc
+      @cpsr = (@cpsr & ~0x3F) | 0x80 | 0x13
+      self.pc = 0x08
     end
 
     def current_cpu_mode
@@ -700,10 +691,6 @@ module RubyboyAdvance
 
       set_banked_regs_by_mode(current_mode, @regs[8..12])
       @regs[8..12] = banked_regs_by_mode(new_mode)
-    end
-
-    def int_to_uint(n)
-      n & 0xFFFF_FFFF
     end
 
     def uint_to_int(n)

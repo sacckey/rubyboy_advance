@@ -65,4 +65,44 @@ RSpec.describe RubyboyAdvance::Cpu do
       end
     end
   end
+
+  describe 'SWI' do
+    def spsr_svc = cpu.instance_variable_get(:@spsrs)[:svc]
+
+    # Stands in for the BIOS: return with movs pc, lr from IWRAM
+    def return_from_swi
+      bus.write32(0x0300_0000, 0xE1B0F00E)
+      regs[15] = 0x0300_0000
+      cpu.exec
+    end
+
+    context 'from ARM' do
+      let(:rom) { [0x06, 0x00, 0x00, 0xEF] } # swi 6
+
+      it 'enters Supervisor mode at 0x08 and returns to the next instruction' do
+        cpu.exec
+
+        expect([regs[15], regs[14], regs[13], cpsr, spsr_svc]).to eq([0x08, 0x0800_0004, 0x0300_7FE0, 0x93, 0x1F])
+
+        return_from_swi
+
+        expect([regs[15], regs[13], cpsr]).to eq([0x0800_0004, 0x0300_7F00, 0x1F])
+      end
+    end
+
+    context 'from Thumb' do
+      let(:rom) { [0x06, 0xDF] } # swi 6
+
+      it 'switches to ARM in Supervisor mode and comes back to Thumb' do
+        cpu.instance_variable_set(:@cpsr, 0x3F)
+        cpu.exec
+
+        expect([regs[15], regs[14], cpsr, spsr_svc]).to eq([0x08, 0x0800_0002, 0x93, 0x3F])
+
+        return_from_swi
+
+        expect([regs[15], cpsr]).to eq([0x0800_0002, 0x3F])
+      end
+    end
+  end
 end
