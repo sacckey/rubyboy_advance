@@ -3,6 +3,7 @@
 module RubyboyAdvance
   class Bus
     attr_reader :interrupt
+    attr_writer :cpu
 
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
@@ -99,7 +100,8 @@ module RubyboyAdvance
         return @ppu.write_io(offset, value) if offset < LCD_IO_SIZE
 
         case offset
-        when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209, 0x301 then @interrupt.write(offset, value)
+        when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
+        when 0x301 then @interrupt.write(offset, value) if @cpu.in_bios? # HALTCNT only works from the BIOS
         else @ioram[offset] = value
         end
       when 0x05 then @ppu.write_palram(addr, value)

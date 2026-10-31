@@ -30,6 +30,7 @@ module RubyboyAdvance
       @sps = { usr: 0, fiq: 0, irq: 0x0300_7FA0, svc: 0x0300_7FE0, abt: 0, und: 0 }
       @lrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @bus = bus
+      @bus.cpu = self
       @interrupt = @bus.interrupt
     end
 
@@ -629,6 +630,12 @@ module RubyboyAdvance
       end
       # TODO: Implement proper cycle counting and other side effects for each instruction.
       1
+    end
+
+    # Whether the instruction being executed is in the BIOS (0x0000-0x3FFF).
+    # pc is already past it, so an instruction at 0x3FFC leaves pc at 0x4000.
+    def in_bios?
+      pc <= 0x4000
     end
 
     private
