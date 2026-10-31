@@ -158,6 +158,12 @@ RSpec.describe RubyboyAdvance::Bus do
       expect([bus.read16(0x0400_0200), bus.read16(0x0400_0208)]).to eq([0x2001, 1])
     end
 
+    it 'keeps only bit 0 of IME' do
+      bus.write16(0x0400_0208, 0xFFFF)
+
+      expect(bus.read16(0x0400_0208)).to eq(1)
+    end
+
     it 'clears only the IF bits written as 1, in both bytes' do
       interrupt.instance_variable_set(:@if, 0x2001)
 

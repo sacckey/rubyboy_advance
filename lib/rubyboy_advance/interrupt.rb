@@ -22,8 +22,8 @@ module RubyboyAdvance
       when 0x201 then (@ie >> 8) & 0xFF
       when 0x202 then @if & 0xFF
       when 0x203 then (@if >> 8) & 0xFF
-      when 0x208 then @ime & 0xFF
-      when 0x209 then (@ime >> 8) & 0xFF
+      when 0x208 then @ime
+      when 0x209 then 0
       end
     end
 
@@ -33,8 +33,8 @@ module RubyboyAdvance
       when 0x201 then @ie = (@ie & 0xFF) | (value << 8)
       when 0x202 then @if &= ~value
       when 0x203 then @if &= ~(value << 8)
-      when 0x208 then @ime = (@ime & 0xFF00) | (value & 0xFF)
-      when 0x209 then @ime = (@ime & 0xFF) | (value << 8)
+      when 0x208 then @ime = value[0]
+      when 0x209 then nil
       end
     end
 
