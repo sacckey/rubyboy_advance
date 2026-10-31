@@ -10,6 +10,7 @@ module RubyboyAdvance
       @ie = 0
       @if = 0
       @ime = 0
+      @halt_flag = false
     end
 
     def request(interrupt)
@@ -35,11 +36,17 @@ module RubyboyAdvance
       when 0x203 then @if &= ~(value << 8)
       when 0x208 then @ime = value[0]
       when 0x209 then nil
+      when 0x301 then @halt_flag = (value[7] == 0)
       end
     end
 
     def irq?
       @ime[0] == 1 && (@if & @ie) != 0
+    end
+
+    def cpu_halted?
+      @halt_flag = false if (@if & @ie) != 0
+      @halt_flag
     end
   end
 end

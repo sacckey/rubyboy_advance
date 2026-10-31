@@ -34,6 +34,8 @@ module RubyboyAdvance
     end
 
     def exec
+      return 1 if @interrupt.cpu_halted?
+
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
       self.pc &= flag_t ? ~1 : ~3

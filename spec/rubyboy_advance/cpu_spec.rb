@@ -105,4 +105,36 @@ RSpec.describe RubyboyAdvance::Cpu do
       end
     end
   end
+
+  describe 'HALTCNT' do
+    let(:rom) { [0x00, 0x00, 0xA0, 0xE1] * 4 } # mov r0, r0
+
+    def halt_until_vblank
+      cpu.exec
+      bus.write(0x0400_0301, 0x01) # bit 7 clear: Halt (bits 0-6 are unused)
+      bus.write16(0x0400_0200, 1)  # IE: VBlank, with IME left off
+    end
+
+    it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
+      halt_until_vblank
+      3.times { cpu.exec }
+
+      expect(regs[15]).to eq(0x0800_0004)
+
+      interrupt.request(:vblank)
+      cpu.exec
+
+      expect(regs[15]).to eq(0x0800_0008)
+    end
+
+    it 'does not stop again once IF is cleared' do
+      halt_until_vblank
+      interrupt.request(:vblank)
+      cpu.exec
+      bus.write16(0x0400_0202, 1) # clear IF
+      cpu.exec
+
+      expect(regs[15]).to eq(0x0800_000C)
+    end
+  end
 end

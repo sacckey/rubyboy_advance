@@ -99,7 +99,7 @@ module RubyboyAdvance
         return @ppu.write_io(offset, value) if offset < LCD_IO_SIZE
 
         case offset
-        when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
+        when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209, 0x301 then @interrupt.write(offset, value)
         else @ioram[offset] = value
         end
       when 0x05 then @ppu.write_palram(addr, value)
