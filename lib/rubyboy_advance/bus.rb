@@ -7,7 +7,7 @@ module RubyboyAdvance
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 
-    def initialize(rom, ppu, cartram, interrupt)
+    def initialize(rom, bios, ppu, cartram, interrupt)
       @ewram = Array.new(0x40000, 0)
       @iwram = Array.new(0x8000, 0)
       @ioram = Array.new(0x400, 0)
@@ -15,8 +15,7 @@ module RubyboyAdvance
       @cartram = cartram
       @ppu = ppu
       @interrupt = interrupt
-      @bios = Array.new(0x4000, 0)
-      @bios[0x18, 24] = [0xE92D500F, 0xE3A00301, 0xE28FE000, 0xE510F004, 0xE8BD500F, 0xE25EF004].pack('V*').bytes
+      @bios = bios
     end
 
     def read(addr)

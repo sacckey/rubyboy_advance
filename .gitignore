@@ -4,5 +4,11 @@
 
 .DS_Store
 
+# BIOS and ROMs, in any letter case. Only our own hand-assembled ROM is tracked.
+*.[bB][iI][nN]
+*.[gG][bB][aA]
+!/spec/roms/hello-red/hello-red.gba
+/spec/roms/gba-tests/
+
 # rspec failure tracking
 .rspec_status
