@@ -22,7 +22,7 @@ Running a ROM needs [SDL3](https://libsdl.org/) (on macOS: `brew install sdl3`).
 It also needs a GBA BIOS (16 KB) dumped from your own console. No BIOS is included.
 
 ```sh
-bundle exec exe/rubyboy-advance spec/roms/hello-red/hello-red.gba path/to/gba_bios.bin
+bundle exec exe/rubyboy-advance path/to/gba_bios.bin spec/roms/hello-red/hello-red.gba
 ```
 
 ## Test ROMs
