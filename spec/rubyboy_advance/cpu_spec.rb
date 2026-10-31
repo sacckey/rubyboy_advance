@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 RSpec.describe RubyboyAdvance::Cpu do
+  let(:bios) { [] }
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
-  let(:bus) { RubyboyAdvance::Bus.new(rom, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt) }
+  let(:bus) { RubyboyAdvance::Bus.new(rom, bios, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt) }
   let(:cpu) { described_class.new(bus) }
 
   def regs = cpu.instance_variable_get(:@regs)
@@ -15,51 +16,28 @@ RSpec.describe RubyboyAdvance::Cpu do
     interrupt.request(:vblank)
   end
 
-  # The game's handler, registered at 0x03007FFC for the BIOS to call. It acknowledges
-  # VBlank in IF and overwrites r1 and r2, which the BIOS has to restore.
-  def install_handler
-    [
-      0xE3A01301, # mov r1, #0x04000000
-      0xE2811C02, # add r1, r1, #0x200
-      0xE3A02001, # mov r2, #1
-      0xE1C120B2, # strh r2, [r1, #2]
-      0xE12FFF1E  # bx lr
-    ].each_with_index { |opcode, i| bus.write32(0x0300_0100 + (i * 4), opcode) }
-    bus.write32(0x0300_7FFC, 0x0300_0100)
-  end
-
-  def run_until_back_in_rom
-    20.times do
-      cpu.exec
-      return if regs[15] >> 24 == 0x08
-    end
-
-    raise 'never returned from the IRQ'
+  # Stands in for the BIOS: clear IF, then return with subs pc, lr, #4 from IWRAM
+  def return_from_irq
+    bus.write16(0x0400_0202, 1)
+    bus.write32(0x0300_0000, 0xE25EF004)
+    regs[15] = 0x0300_0000
+    cpu.exec
   end
 
   describe 'IRQ' do
-    before { install_handler }
-
     context 'from ARM' do
       let(:rom) { [0x00, 0x00, 0xA0, 0xE1] * 2 } # mov r0, r0
 
-      it 'enters IRQ mode at 0x18' do
+      it 'enters IRQ mode at 0x18 and returns to the next instruction' do
         cpu.exec
         request_vblank
         cpu.exec
 
         expect([regs[15], regs[14], cpsr, spsr_irq]).to eq([0x18, 0x0800_0008, 0x92, 0x1F])
-      end
 
-      it 'calls the handler through the BIOS and returns to the next instruction' do
-        cpu.exec
-        regs[0, 4] = [0x11, 0x22, 0x33, 0x44]
-        request_vblank
-        run_until_back_in_rom
+        return_from_irq
 
         expect([regs[15], regs[13], cpsr]).to eq([0x0800_0004, 0x0300_7F00, 0x1F])
-        expect(regs[0, 4]).to eq([0x11, 0x22, 0x33, 0x44])
-        expect(bus.read16(0x0400_0202)).to eq(0)
       end
 
       it 'waits while CPSR.I is set' do
@@ -74,7 +52,7 @@ RSpec.describe RubyboyAdvance::Cpu do
     context 'from Thumb' do
       let(:rom) { [0xC0, 0x46] * 2 } # mov r8, r8
 
-      it 'runs the handler in ARM and comes back to Thumb' do
+      it 'switches to ARM for the handler and comes back to Thumb' do
         cpu.instance_variable_set(:@cpsr, 0x3F)
         cpu.exec
         request_vblank
@@ -82,9 +60,97 @@ RSpec.describe RubyboyAdvance::Cpu do
 
         expect([regs[15], regs[14], cpsr]).to eq([0x18, 0x0800_0006, 0x92])
 
-        run_until_back_in_rom
+        return_from_irq
 
         expect([regs[15], cpsr]).to eq([0x0800_0002, 0x3F])
+      end
+    end
+  end
+
+  describe 'SWI' do
+    def spsr_svc = cpu.instance_variable_get(:@spsrs)[:svc]
+
+    # Stands in for the BIOS: return with movs pc, lr from IWRAM
+    def return_from_swi
+      bus.write32(0x0300_0000, 0xE1B0F00E)
+      regs[15] = 0x0300_0000
+      cpu.exec
+    end
+
+    context 'from ARM' do
+      let(:rom) { [0x06, 0x00, 0x00, 0xEF] } # swi 6
+
+      it 'enters Supervisor mode at 0x08 and returns to the next instruction' do
+        cpu.exec
+
+        expect([regs[15], regs[14], regs[13], cpsr, spsr_svc]).to eq([0x08, 0x0800_0004, 0x0300_7FE0, 0x93, 0x1F])
+
+        return_from_swi
+
+        expect([regs[15], regs[13], cpsr]).to eq([0x0800_0004, 0x0300_7F00, 0x1F])
+      end
+    end
+
+    context 'from Thumb' do
+      let(:rom) { [0x06, 0xDF] } # swi 6
+
+      it 'switches to ARM in Supervisor mode and comes back to Thumb' do
+        cpu.instance_variable_set(:@cpsr, 0x3F)
+        cpu.exec
+
+        expect([regs[15], regs[14], cpsr, spsr_svc]).to eq([0x08, 0x0800_0002, 0x93, 0x3F])
+
+        return_from_swi
+
+        expect([regs[15], cpsr]).to eq([0x0800_0002, 0x3F])
+      end
+    end
+  end
+
+  describe 'HALTCNT' do
+    let(:rom) { [] }
+    let(:code) { [0x00, 0x00, 0xC1, 0xE5] + ([0x00, 0x00, 0xA0, 0xE1] * 3) } # strb r0, [r1], then mov r0, r0
+
+    before do
+      regs[0] = 0x01             # bit 7 clear: Halt (bits 0-6 are unused)
+      regs[1] = 0x0400_0301      # HALTCNT
+      bus.write16(0x0400_0200, 1) # IE: VBlank, with IME left off
+    end
+
+    context 'when written from the BIOS' do
+      let(:bios) { code }
+
+      before { regs[15] = 0 }
+
+      it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
+        4.times { cpu.exec }
+
+        expect(regs[15]).to eq(0x04)
+
+        interrupt.request(:vblank)
+        cpu.exec
+
+        expect(regs[15]).to eq(0x08)
+      end
+
+      it 'does not stop again once IF is cleared' do
+        cpu.exec
+        interrupt.request(:vblank)
+        cpu.exec
+        bus.write16(0x0400_0202, 1) # clear IF
+        cpu.exec
+
+        expect(regs[15]).to eq(0x0C)
+      end
+    end
+
+    context 'when written from outside the BIOS' do
+      let(:rom) { code }
+
+      it 'is ignored' do
+        2.times { cpu.exec }
+
+        expect(regs[15]).to eq(0x0800_0008)
       end
     end
   end

@@ -3,11 +3,12 @@
 module RubyboyAdvance
   class Bus
     attr_reader :interrupt
+    attr_writer :cpu
 
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 
-    def initialize(rom, ppu, cartram, interrupt)
+    def initialize(rom, bios, ppu, cartram, interrupt)
       @ewram = Array.new(0x40000, 0)
       @iwram = Array.new(0x8000, 0)
       @ioram = Array.new(0x400, 0)
@@ -15,8 +16,7 @@ module RubyboyAdvance
       @cartram = cartram
       @ppu = ppu
       @interrupt = interrupt
-      @bios = Array.new(0x4000, 0)
-      @bios[0x18, 24] = [0xE92D500F, 0xE3A00301, 0xE28FE000, 0xE510F004, 0xE8BD500F, 0xE25EF004].pack('V*').bytes
+      @bios = bios
     end
 
     def read(addr)
@@ -101,6 +101,7 @@ module RubyboyAdvance
 
         case offset
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
+        when 0x301 then @interrupt.write(offset, value) if @cpu.in_bios? # HALTCNT only works from the BIOS
         else @ioram[offset] = value
         end
       when 0x05 then @ppu.write_palram(addr, value)

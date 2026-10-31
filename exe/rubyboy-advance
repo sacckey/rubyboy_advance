@@ -4,9 +4,11 @@
 require 'rubyboy_advance'
 require 'rubyboy_advance/lcd'
 
-abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
+abort "Usage: #{File.basename($PROGRAM_NAME)} BIOS_PATH ROM_PATH" unless ARGV.size == 2
 
-rom = File.binread(ARGV[0]).bytes
+bios = File.binread(ARGV[0]).bytes
+abort 'BIOS_PATH must be a 16 KB GBA BIOS dump' unless bios.size == 0x4000
+rom = File.binread(ARGV[1]).bytes
 cartram =
   case rom.pack('C*')
   when /FLASH1M_V/ then RubyboyAdvance::Flash128.new
@@ -15,7 +17,7 @@ cartram =
   end
 interrupt = RubyboyAdvance::Interrupt.new
 ppu = RubyboyAdvance::Ppu.new(interrupt)
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu, cartram, interrupt))
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt))
 lcd = RubyboyAdvance::Lcd.new
 begin
   loop do
