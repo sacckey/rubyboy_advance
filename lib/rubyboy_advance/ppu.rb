@@ -4,13 +4,14 @@ module RubyboyAdvance
   class Ppu
     attr_reader :buffer
 
-    def initialize
+    def initialize(interrupt)
       @cycles = 0
       @io = Array.new(0x60, 0)
       @palram = Array.new(0x400, 0)
       @vram = Array.new(0x18000, 0)
       @oam = Array.new(0x400, 0)
       @buffer = Array.new(240 * 160, 0x7FFF)
+      @interrupt = interrupt
     end
 
     def step(cycles)
@@ -22,6 +23,7 @@ module RubyboyAdvance
         self.vcount += 1
         if vcount == 160
           self.vblank = true
+          @interrupt.request(:vblank) if dispstat[3] == 1
           res = true
           dispcnt = read_io16(0)
           case dispcnt & 0x7
@@ -112,6 +114,10 @@ module RubyboyAdvance
     end
 
     private
+
+    def dispstat
+      read_io16(4)
+    end
 
     def vcount
       @io[6]
