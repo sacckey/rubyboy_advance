@@ -27,7 +27,7 @@ module RubyboyAdvance
       @cpsr = 0x1F
       @spsrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @banked_regs = { usr: Array.new(5, 0), fiq: Array.new(5, 0) }
-      @sps = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
+      @sps = { usr: 0, fiq: 0, irq: 0x0300_7FA0, svc: 0x0300_7FE0, abt: 0, und: 0 }
       @lrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @bus = bus
       @interrupt = @bus.interrupt

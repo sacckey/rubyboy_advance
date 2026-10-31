@@ -170,7 +170,7 @@ RSpec.describe RubyboyAdvance::Bus do
   end
 
   it 'reads 0xFF from unmapped addresses' do
-    expect(bus.read(0x0000_0000)).to eq(0xFF)
+    expect(bus.read(0x0100_0000)).to eq(0xFF)
   end
 
   describe '16- and 32-bit access' do

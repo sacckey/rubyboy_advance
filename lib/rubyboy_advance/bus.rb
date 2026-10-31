@@ -15,10 +15,13 @@ module RubyboyAdvance
       @cartram = cartram
       @ppu = ppu
       @interrupt = interrupt
+      @bios = Array.new(0x4000, 0)
+      @bios[0x18, 24] = [0xE92D500F, 0xE3A00301, 0xE28FE000, 0xE510F004, 0xE8BD500F, 0xE25EF004].pack('V*').bytes
     end
 
     def read(addr)
       case addr >> 24
+      when 0x00 then return @bios[addr & 0x3FFF]
       when 0x02 then return @ewram[addr & 0x3FFFF]
       when 0x03 then return @iwram[addr & 0x7FFF]
       when 0x04
