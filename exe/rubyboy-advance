@@ -7,14 +7,15 @@ require 'rubyboy_advance/lcd'
 abort "Usage: #{File.basename($PROGRAM_NAME)} ROM_PATH" unless ARGV.size == 1
 
 rom = File.binread(ARGV[0]).bytes
-ppu = RubyboyAdvance::Ppu.new
 cartram =
   case rom.pack('C*')
   when /FLASH1M_V/ then RubyboyAdvance::Flash128.new
   when /FLASH\w*_V/ then RubyboyAdvance::Flash.new
   else RubyboyAdvance::Sram.new
   end
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu, cartram))
+interrupt = RubyboyAdvance::Interrupt.new
+ppu = RubyboyAdvance::Ppu.new(interrupt)
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, ppu, cartram, interrupt))
 lcd = RubyboyAdvance::Lcd.new
 begin
   loop do

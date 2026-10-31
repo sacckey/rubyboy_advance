@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
 RSpec.describe RubyboyAdvance::Bus do
-  let(:bus) { described_class.new([0x78, 0x56, 0x34, 0x12], RubyboyAdvance::Ppu.new, RubyboyAdvance::Sram.new) }
+  let(:interrupt) { RubyboyAdvance::Interrupt.new }
+  let(:bus) { described_class.new([0x78, 0x56, 0x34, 0x12], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt) }
 
   {
     'EWRAM' => [0x0200_0000, 0x0204_0000],
@@ -149,8 +150,33 @@ RSpec.describe RubyboyAdvance::Bus do
     end
   end
 
+  describe 'interrupt registers' do
+    it 'reads back IE and IME' do
+      bus.write16(0x0400_0200, 0x2001)
+      bus.write16(0x0400_0208, 1)
+
+      expect([bus.read16(0x0400_0200), bus.read16(0x0400_0208)]).to eq([0x2001, 1])
+    end
+
+    it 'keeps only bit 0 of IME' do
+      bus.write16(0x0400_0208, 0xFFFF)
+
+      expect(bus.read16(0x0400_0208)).to eq(1)
+    end
+
+    it 'clears only the IF bits written as 1, in both bytes' do
+      interrupt.instance_variable_set(:@if, 0x2001)
+
+      bus.write16(0x0400_0202, 0x0001)
+      expect(bus.read16(0x0400_0202)).to eq(0x2000)
+
+      bus.write16(0x0400_0202, 0x2000)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+    end
+  end
+
   it 'reads 0xFF from unmapped addresses' do
-    expect(bus.read(0x0000_0000)).to eq(0xFF)
+    expect(bus.read(0x0100_0000)).to eq(0xFF)
   end
 
   describe '16- and 32-bit access' do

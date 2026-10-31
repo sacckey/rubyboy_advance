@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 RSpec.describe RubyboyAdvance::Ppu do
-  let(:ppu) { described_class.new }
-  let(:bus) { RubyboyAdvance::Bus.new([], ppu, RubyboyAdvance::Sram.new) }
+  let(:interrupt) { RubyboyAdvance::Interrupt.new }
+  let(:ppu) { described_class.new(interrupt) }
+  let(:bus) { RubyboyAdvance::Bus.new([], ppu, RubyboyAdvance::Sram.new, interrupt) }
 
   describe 'mode 0' do
     it 'draws BG0 with the tile palette bank and shows the backdrop for color 0' do
@@ -30,6 +31,17 @@ RSpec.describe RubyboyAdvance::Ppu do
       bus.write16(0x0400_0000, 0x0000) # BG0 off
 
       expect { ppu.step(1232 * 228) }.to change { ppu.buffer[0] }.from(0x3333).to(0x1111)
+    end
+  end
+
+  describe 'VBlank interrupt' do
+    it 'is requested only when DISPSTAT bit 3 is set' do
+      ppu.step(1232 * 228)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+
+      bus.write16(0x0400_0004, 0x0008) # DISPSTAT: VBlank IRQ on
+      ppu.step(1232 * 228)
+      expect(bus.read16(0x0400_0202)).to eq(1)
     end
   end
 end
