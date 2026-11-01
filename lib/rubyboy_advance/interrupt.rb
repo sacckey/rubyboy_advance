@@ -3,7 +3,11 @@
 module RubyboyAdvance
   class Interrupt
     INTERRUPTS = {
-      vblank: 0
+      vblank: 0,
+      timer0: 3,
+      timer1: 4,
+      timer2: 5,
+      timer3: 6
     }.freeze
 
     def initialize

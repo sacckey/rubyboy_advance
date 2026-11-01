@@ -17,11 +17,14 @@ cartram =
   end
 interrupt = RubyboyAdvance::Interrupt.new
 ppu = RubyboyAdvance::Ppu.new(interrupt)
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt))
+timer = RubyboyAdvance::Timer.new(interrupt)
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer))
 lcd = RubyboyAdvance::Lcd.new
 begin
   loop do
-    next unless ppu.step(cpu.exec)
+    cycles = cpu.exec
+    timer.step(cycles)
+    next unless ppu.step(cycles)
 
     lcd.draw(ppu.buffer)
     break if lcd.window_should_close?
