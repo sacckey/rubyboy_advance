@@ -31,14 +31,23 @@ RSpec.describe RubyboyAdvance::Timer do
       expect(counter(0)).to eq(0x1005)
     end
 
-    it 'starts its prescaler again when re-enabled' do
+    it 'keeps the prescaler on the running clock when re-enabled' do
       start(0, 0, 0x81)
       run(63)
       bus.write16(0x0400_0102, 0x01)
       bus.write16(0x0400_0102, 0x81)
-      run(63)
+      run(1)
 
-      expect(counter(0)).to eq(0)
+      expect(counter(0)).to eq(1)
+    end
+
+    it 'does not jump when the prescaler changes while running' do
+      start(0, 0, 0x83)
+      run(63)
+      bus.write16(0x0400_0102, 0x80)
+      run(1)
+
+      expect(counter(0)).to eq(1)
     end
   end
 
@@ -86,6 +95,14 @@ RSpec.describe RubyboyAdvance::Timer do
       timer.step(3)
 
       expect(counter(0)).to eq(0xFFFF)
+    end
+
+    it 'handles every overflow in one step' do
+      start(0, 0xFFFE, 0x80)
+      start(1, 0, 0x84)
+      timer.step(4)
+
+      expect([counter(0), counter(1)]).to eq([0xFFFE, 2])
     end
   end
 

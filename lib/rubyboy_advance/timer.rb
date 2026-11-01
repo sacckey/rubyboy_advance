@@ -4,13 +4,15 @@ module RubyboyAdvance
   class Timer
     def initialize(interrupt)
       @interrupt = interrupt
-      @cycles = [0, 0, 0, 0]
+      @cycles = 0 # One clock that never stops; every prescaler ticks on its multiples, as on hardware
       @counts = [0, 0, 0, 0]
       @reloads = [0, 0, 0, 0]
       @settings = [0, 0, 0, 0] # 8bit
     end
 
     def step(cycles)
+      before = @cycles
+      @cycles += cycles
       overflows = 0
       4.times do |i|
         if @settings[i][7] == 0
@@ -21,21 +23,16 @@ module RubyboyAdvance
         if i > 0 && @settings[i][2] == 1
           @counts[i] += overflows
         else
-          @cycles[i] += cycles
           prescaler_i = prescaler(i)
-          count = @cycles[i] / prescaler_i
-          @counts[i] += count
-          @cycles[i] -= count * prescaler_i
-        end
-
-        if @counts[i] >= 0x10000
-          @counts[i] = @reloads[i] + (@counts[i] - 0x10000)
-          @interrupt.request(:"timer#{i}") if @settings[i][6] == 1
-          overflows = 1
-          next
+          @counts[i] += (@cycles / prescaler_i) - (before / prescaler_i)
         end
 
         overflows = 0
+        while @counts[i] >= 0x10000
+          @counts[i] -= 0x10000 - @reloads[i]
+          overflows += 1
+        end
+        @interrupt.request(:"timer#{i}") if overflows > 0 && @settings[i][6] == 1
       end
     end
 
@@ -60,10 +57,7 @@ module RubyboyAdvance
       when 2
         before = @settings[tm_index][7]
         @settings[tm_index] = value
-        if before == 0 && @settings[tm_index][7] == 1
-          @counts[tm_index] = @reloads[tm_index]
-          @cycles[tm_index] = 0
-        end
+        @counts[tm_index] = @reloads[tm_index] if before == 0 && @settings[tm_index][7] == 1
       end
     end
 
