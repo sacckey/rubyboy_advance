@@ -3,7 +3,17 @@
 RSpec.describe RubyboyAdvance::Timer do
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
   let(:timer) { described_class.new(interrupt) }
-  let(:bus) { RubyboyAdvance::Bus.new([], [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt, timer) }
+  let(:bus) do
+    RubyboyAdvance::Bus.new(
+      [],
+      [],
+      RubyboyAdvance::Ppu.new(interrupt),
+      RubyboyAdvance::Sram.new,
+      interrupt,
+      timer,
+      RubyboyAdvance::Keypad.new(interrupt)
+    )
+  end
 
   def start(index, reload, control)
     bus.write16(0x0400_0100 + (index * 4), reload)
