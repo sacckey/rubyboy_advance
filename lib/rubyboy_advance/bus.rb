@@ -8,7 +8,7 @@ module RubyboyAdvance
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 
-    def initialize(rom, bios, ppu, cartram, interrupt)
+    def initialize(rom, bios, ppu, cartram, interrupt, timer)
       @ewram = Array.new(0x40000, 0)
       @iwram = Array.new(0x8000, 0)
       @ioram = Array.new(0x400, 0)
@@ -18,6 +18,7 @@ module RubyboyAdvance
       @interrupt = interrupt
       @bios = bios
       @dma = Dma.new(self)
+      @timer = timer
     end
 
     def read(addr)
@@ -30,6 +31,7 @@ module RubyboyAdvance
         return @ppu.read_io(offset) if offset < LCD_IO_SIZE
 
         case offset
+        when 0x100..0x10F then return @timer.read(offset)
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then return @interrupt.read(offset)
         when 0x0B0..0x0DF then return @dma.read(offset)
         else return @ioram[offset]
@@ -102,6 +104,7 @@ module RubyboyAdvance
         return @ppu.write_io(offset, value) if offset < LCD_IO_SIZE
 
         case offset
+        when 0x100..0x10F then @timer.write(offset, value)
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
         when 0x301 then @interrupt.write(offset, value) if @cpu.in_bios? # HALTCNT only works from the BIOS
         when 0x0B0..0x0DF then @dma.write(offset, value)

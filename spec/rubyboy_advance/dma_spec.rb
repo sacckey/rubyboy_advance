@@ -3,7 +3,7 @@
 RSpec.describe RubyboyAdvance::Dma do
   let(:rom) { [] }
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
-  let(:bus) { RubyboyAdvance::Bus.new(rom, [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt) }
+  let(:bus) { RubyboyAdvance::Bus.new(rom, [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt, RubyboyAdvance::Timer.new(interrupt)) }
 
   def start(channel, sad, dad, count, control)
     base = 0x0400_00B0 + (channel * 12)
