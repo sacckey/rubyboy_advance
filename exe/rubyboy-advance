@@ -29,6 +29,8 @@ begin
 
     lcd.draw(ppu.buffer)
     break if lcd.window_should_close?
+
+    keypad.update(lcd.pressed_keys)
   end
 rescue RuntimeError => e
   abort e.message

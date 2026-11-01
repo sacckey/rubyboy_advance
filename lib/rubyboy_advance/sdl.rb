@@ -14,6 +14,16 @@ module RubyboyAdvance
     SCALEMODE_NEAREST = 0
     EVENT_QUIT = 0x100
     EVENT_SIZE = 128
+    SCANCODE_A = 4
+    SCANCODE_D = 7
+    SCANCODE_I = 12
+    SCANCODE_J = 13
+    SCANCODE_K = 14
+    SCANCODE_O = 18
+    SCANCODE_Q = 20
+    SCANCODE_S = 22
+    SCANCODE_U = 24
+    SCANCODE_W = 26
 
     attach_function :init, :SDL_Init, [:uint32], :bool
     attach_function :quit, :SDL_Quit, [], :void
@@ -30,5 +40,6 @@ module RubyboyAdvance
     attach_function :render_texture, :SDL_RenderTexture, %i[pointer pointer pointer pointer], :bool
     attach_function :render_present, :SDL_RenderPresent, [:pointer], :bool
     attach_function :poll_event, :SDL_PollEvent, [:pointer], :bool
+    attach_function :get_keyboard_state, :SDL_GetKeyboardState, [:pointer], :pointer
   end
 end
