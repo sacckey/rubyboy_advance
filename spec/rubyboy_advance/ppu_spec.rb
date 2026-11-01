@@ -3,7 +3,17 @@
 RSpec.describe RubyboyAdvance::Ppu do
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
   let(:ppu) { described_class.new(interrupt) }
-  let(:bus) { RubyboyAdvance::Bus.new([], [], ppu, RubyboyAdvance::Sram.new, interrupt, RubyboyAdvance::Timer.new(interrupt)) }
+  let(:bus) do
+    RubyboyAdvance::Bus.new(
+      [],
+      [],
+      ppu,
+      RubyboyAdvance::Sram.new,
+      interrupt,
+      RubyboyAdvance::Timer.new(interrupt),
+      RubyboyAdvance::Keypad.new(interrupt)
+    )
+  end
 
   describe 'mode 0' do
     it 'draws BG0 with the tile palette bank and shows the backdrop for color 0' do

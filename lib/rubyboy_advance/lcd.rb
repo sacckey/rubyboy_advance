@@ -7,6 +7,12 @@ module RubyboyAdvance
     WIDTH = 240
     HEIGHT = 160
     SCALE = 3
+    # Keys for KEYINPUT bits 0-9: A, B, Select, Start, Right, Left, Up, Down, R, L
+    KEYS = [
+      SDL::SCANCODE_K, SDL::SCANCODE_J, SDL::SCANCODE_U, SDL::SCANCODE_I,
+      SDL::SCANCODE_D, SDL::SCANCODE_A, SDL::SCANCODE_W, SDL::SCANCODE_S,
+      SDL::SCANCODE_O, SDL::SCANCODE_Q
+    ].freeze
 
     def initialize
       raise SDL.get_error unless SDL.init(SDL::INIT_VIDEO)
@@ -23,6 +29,7 @@ module RubyboyAdvance
       SDL.set_texture_scale_mode(@texture, SDL::SCALEMODE_NEAREST)
       @pixels = FFI::MemoryPointer.new(:uint16, WIDTH * HEIGHT)
       @event = FFI::MemoryPointer.new(:uint8, SDL::EVENT_SIZE)
+      @keyboard = SDL.get_keyboard_state(nil) # SDL keeps this array up to date as events are polled
     end
 
     def draw(buffer)
@@ -39,6 +46,11 @@ module RubyboyAdvance
       end
 
       false
+    end
+
+    # Bit n is set while the key for KEYINPUT bit n is held.
+    def pressed_keys
+      KEYS.each_with_index.sum { |scancode, bit| @keyboard.get_uint8(scancode) << bit }
     end
 
     def close

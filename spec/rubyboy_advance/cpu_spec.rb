@@ -3,7 +3,17 @@
 RSpec.describe RubyboyAdvance::Cpu do
   let(:bios) { [] }
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
-  let(:bus) { RubyboyAdvance::Bus.new(rom, bios, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt, RubyboyAdvance::Timer.new(interrupt)) }
+  let(:bus) do
+    RubyboyAdvance::Bus.new(
+      rom,
+      bios,
+      RubyboyAdvance::Ppu.new(interrupt),
+      RubyboyAdvance::Sram.new,
+      interrupt,
+      RubyboyAdvance::Timer.new(interrupt),
+      RubyboyAdvance::Keypad.new(interrupt)
+    )
+  end
   let(:cpu) { described_class.new(bus) }
 
   def regs = cpu.instance_variable_get(:@regs)

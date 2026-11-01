@@ -2,7 +2,16 @@
 
 RSpec.describe RubyboyAdvance::Bus do
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
-  let(:bus) { described_class.new([0x78, 0x56, 0x34, 0x12], [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt, RubyboyAdvance::Timer.new(interrupt)) }
+  let(:bus) do
+    described_class.new(
+      [0x78, 0x56, 0x34, 0x12],
+      [],
+      RubyboyAdvance::Ppu.new(interrupt),
+      RubyboyAdvance::Sram.new, interrupt,
+      RubyboyAdvance::Timer.new(interrupt),
+      RubyboyAdvance::Keypad.new(interrupt)
+    )
+  end
 
   {
     'EWRAM' => [0x0200_0000, 0x0204_0000],

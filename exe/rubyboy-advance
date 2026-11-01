@@ -18,7 +18,8 @@ cartram =
 interrupt = RubyboyAdvance::Interrupt.new
 ppu = RubyboyAdvance::Ppu.new(interrupt)
 timer = RubyboyAdvance::Timer.new(interrupt)
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer))
+keypad = RubyboyAdvance::Keypad.new(interrupt)
+cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer, keypad))
 lcd = RubyboyAdvance::Lcd.new
 begin
   loop do
@@ -28,6 +29,8 @@ begin
 
     lcd.draw(ppu.buffer)
     break if lcd.window_should_close?
+
+    keypad.update(lcd.pressed_keys)
   end
 rescue RuntimeError => e
   abort e.message
