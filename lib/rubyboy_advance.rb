@@ -2,6 +2,7 @@
 
 require_relative 'rubyboy_advance/bus'
 require_relative 'rubyboy_advance/cpu'
+require_relative 'rubyboy_advance/dma'
 require_relative 'rubyboy_advance/flash'
 require_relative 'rubyboy_advance/flash128'
 require_relative 'rubyboy_advance/interrupt'

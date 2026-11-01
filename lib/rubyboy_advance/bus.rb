@@ -17,6 +17,7 @@ module RubyboyAdvance
       @ppu = ppu
       @interrupt = interrupt
       @bios = bios
+      @dma = Dma.new(self)
     end
 
     def read(addr)
@@ -30,6 +31,7 @@ module RubyboyAdvance
 
         case offset
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then return @interrupt.read(offset)
+        when 0x0B0..0x0DF then return @dma.read(offset)
         else return @ioram[offset]
         end
       when 0x05 then return @ppu.read_palram(addr)
@@ -102,6 +104,7 @@ module RubyboyAdvance
         case offset
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
         when 0x301 then @interrupt.write(offset, value) if @cpu.in_bios? # HALTCNT only works from the BIOS
+        when 0x0B0..0x0DF then @dma.write(offset, value)
         else @ioram[offset] = value
         end
       when 0x05 then @ppu.write_palram(addr, value)
