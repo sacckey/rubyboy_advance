@@ -2,6 +2,10 @@
 
 module RubyboyAdvance
   class Dma
+    # Address bits each channel uses: DMA0 cannot read the Game Pak, and only DMA3 can write to it.
+    SAD_MASKS = [0x07FF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF].freeze
+    DAD_MASKS = [0x07FF_FFFF, 0x07FF_FFFF, 0x07FF_FFFF, 0x0FFF_FFFF].freeze
+
     def initialize(bus)
       @bus = bus
       @channels = [0, 0, 0, 0]
@@ -31,8 +35,8 @@ module RubyboyAdvance
     def write_dma(dma, channel_index)
       return false if dma[95] == 0
 
-      sad = dma & 0xFFFF_FFFF
-      dad = (dma >> 32) & 0xFFFF_FFFF
+      sad = dma & SAD_MASKS[channel_index]
+      dad = (dma >> 32) & DAD_MASKS[channel_index]
 
       max = channel_index == 3 ? 0x10000 : 0x4000
       cnt_l = (dma >> 64) & (max - 1)
@@ -43,6 +47,7 @@ module RubyboyAdvance
         step = halfword ? 2 : 4
         dad_diff = [step, -step, 0, step][(cnt_h >> 5) & 3]
         sad_diff = [step, -step, 0, step][(cnt_h >> 7) & 3]
+        sad_diff = step if (0x0800_0000...0x0E00_0000).cover?(sad) # Game Pak ROM is always read upward
 
         cnt.times do
           value = halfword ? @bus.read16(sad) : @bus.read32(sad)

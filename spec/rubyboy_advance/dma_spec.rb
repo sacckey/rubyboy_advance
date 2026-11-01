@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 RSpec.describe RubyboyAdvance::Dma do
+  let(:rom) { [] }
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
-  let(:bus) { RubyboyAdvance::Bus.new([], [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt) }
+  let(:bus) { RubyboyAdvance::Bus.new(rom, [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt) }
 
   def start(channel, sad, dad, count, control)
     base = 0x0400_00B0 + (channel * 12)
@@ -46,6 +47,28 @@ RSpec.describe RubyboyAdvance::Dma do
       start(channel, 0x0200_0000, 0x0201_0000, 0, 0x8100)
 
       expect(halfwords(0x0201_0000 + ((max - 1) * 2), 2)).to eq([0x1111, 0])
+    end
+  end
+
+  it 'ignores source bits above 28 on DMA3' do
+    start(3, 0x1200_0000, 0x0300_0000, 1, 0x8000)
+
+    expect(halfwords(0x0300_0000, 1)).to eq([0x1111])
+  end
+
+  it 'ignores destination bits above 27 on DMA0' do
+    start(0, 0x0200_0000, 0x0B00_0000, 1, 0x8000)
+
+    expect(halfwords(0x0300_0000, 1)).to eq([0x1111])
+  end
+
+  context 'from the Game Pak ROM' do
+    let(:rom) { [0x11, 0x11, 0x22, 0x22, 0x33, 0x33] }
+
+    it 'moves the source forwards even when it is set to fixed' do
+      start(3, 0x0800_0000, 0x0300_0000, 3, 0x8100)
+
+      expect(halfwords(0x0300_0000, 3)).to eq([0x1111, 0x2222, 0x3333])
     end
   end
 
