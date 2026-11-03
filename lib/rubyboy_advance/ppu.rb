@@ -4,6 +4,12 @@ module RubyboyAdvance
   class Ppu
     attr_reader :buffer
 
+    OBJ_SIZES = [ # [shape][size] = [width, height]
+      [[8, 8], [16, 16], [32, 32], [64, 64]],
+      [[16, 8], [32, 8], [32, 16], [64, 32]],
+      [[8, 16], [8, 32], [16, 32], [32, 64]]
+    ].freeze
+
     def initialize(interrupt)
       @cycles = 0
       @io = Array.new(0x60, 0)
@@ -30,7 +36,14 @@ module RubyboyAdvance
           when 0
             @buffer.fill(@palram[0] | (@palram[1] << 8))
             bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
-            bgs.sort_by { |n| [-(read_io16(8 + n * 2) & 0b11), -n] }.each { |n| draw_bg(n) }
+            bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
+            obj_colors, obj_priorities = dispcnt[12] == 1 ? render_objs(read_objs) : [{}, {}]
+            3.downto(0) do |priority|
+              (bgs_by_priority[priority] || []).sort.reverse.each do |n|
+                draw_bg(n)
+              end
+              draw_objs(obj_colors, obj_priorities, priority)
+            end
           when 3
             (160 * 240).times do |i|
               @buffer[i] = @vram[i << 1] | (@vram[(i << 1) + 1] << 8)
@@ -122,6 +135,81 @@ module RubyboyAdvance
           i = ((palette_index << 4) + color) << 1
           @buffer[y * 240 + x] = @palram[i] | (@palram[i + 1] << 8)
         end
+      end
+    end
+
+    def draw_objs(obj_colors, obj_priorities, priority)
+      obj_colors.each do |index, color|
+        @buffer[index] = color if obj_priorities[index] == priority
+      end
+    end
+
+    # Merges all OBJs into one layer keyed by screen index before it meets the BGs, as the hardware does.
+    # In OAM order a pixel goes to a lower priority value, or to any OBJ while it is still transparent.
+    # A transparent pixel keeps the color under it but still sets the priority, so it can lift an OBJ
+    # with a lower number in front of a BG (NanoBoyAdvance sprite.cc).
+    def render_objs(objs)
+      obj_colors = {}
+      obj_priorities = {}
+      is_1d = read_io16(0)[6] == 1
+
+      objs.each do |obj|
+        next if obj[:rotate] == 0 && obj[:invisible] == 1
+        next if obj[:shape] == 3
+
+        width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
+
+        height.times do |y|
+          screen_y = (obj[:y] + y) & 0xFF
+          next if screen_y >= 160
+
+          tex_y = obj[:rotate] == 0 && obj[:yflip] == 1 ? height - 1 - y : y
+
+          width.times do |x|
+            screen_x = (obj[:x] + x) & 0x1FF
+            next if screen_x >= 240
+
+            tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
+
+            index = screen_y * 240 + screen_x
+            next unless obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
+
+            tile_number = if is_1d
+                            (obj[:tile] + (tex_y >> 3) * (width >> 3) + (tex_x >> 3)) & 0x3FF
+                          else
+                            ((obj[:tile] + ((tex_y >> 3) << 5)) & 0x3E0) | ((obj[:tile] + (tex_x >> 3)) & 0x1F)
+                          end
+
+            pixel = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 2) + ((tex_x & 7) >> 1)]
+            color = tex_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+            obj_priorities[index] = obj[:priority]
+            next if color == 0
+
+            i = 0x200 + (((obj[:bank] << 4) + color) << 1)
+            obj_colors[index] = @palram[i] | (@palram[i + 1] << 8)
+          end
+        end
+      end
+
+      [obj_colors, obj_priorities]
+    end
+
+    def read_objs
+      128.times.map do |i|
+        base = i * 8
+        {
+          y: @oam[base],
+          rotate: @oam[base + 1][0],
+          invisible: @oam[base + 1][1],
+          shape: @oam[base + 1] >> 6,
+          x: @oam[base + 2] | (@oam[base + 3][0] << 8),
+          xflip: @oam[base + 3][4],
+          yflip: @oam[base + 3][5],
+          size: @oam[base + 3] >> 6,
+          tile: @oam[base + 4] | ((@oam[base + 5] & 0b11) << 8),
+          priority: (@oam[base + 5] >> 2) & 0b11,
+          bank: @oam[base + 5] >> 4
+        }
       end
     end
 
