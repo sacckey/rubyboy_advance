@@ -31,6 +31,7 @@ module RubyboyAdvance
             @buffer.fill(@palram[0] | (@palram[1] << 8))
             bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
             bgs.sort_by { |n| [-(read_io16(8 + n * 2) & 0b11), -n] }.each { |n| draw_bg(n) }
+            draw_objs if dispcnt[12] == 1
           when 3
             (160 * 240).times do |i|
               @buffer[i] = @vram[i << 1] | (@vram[(i << 1) + 1] << 8)
@@ -121,6 +122,46 @@ module RubyboyAdvance
 
           i = ((palette_index << 4) + color) << 1
           @buffer[y * 240 + x] = @palram[i] | (@palram[i + 1] << 8)
+        end
+      end
+    end
+
+    def draw_objs
+      objs = 128.times.map do |i|
+        base = i * 8
+        {
+          y: @oam[base],
+          rotate: @oam[base + 1][0],
+          invisible: @oam[base + 1][1],
+          shape: @oam[base + 1] >> 6,
+          x: @oam[base + 2] | (@oam[base + 3][0] << 8),
+          xflip: @oam[base + 3][4],
+          yflip: @oam[base + 3][5],
+          size: @oam[base + 3] >> 6,
+          tile: @oam[base + 4] | ((@oam[base + 5] & 0b11) << 8),
+          priority: (@oam[base + 5] >> 2) & 0b11,
+          bank: @oam[base + 5] >> 4
+        }
+      end
+
+      objs.reverse_each do |obj|
+        next if obj[:rotate] == 0 && obj[:invisible] == 1
+
+        8.times do |y|
+          screen_y = (obj[:y] + y) & 0xFF
+          next if screen_y >= 160
+
+          8.times do |x|
+            screen_x = (obj[:x] + x) & 0x1FF
+            next if screen_x >= 240
+
+            pixel = @vram[0x10000 + (obj[:tile] << 5) + (y << 2) + (x >> 1)]
+            color = x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+            next if color == 0
+
+            i = 0x200 + (((obj[:bank] << 4) + color) << 1)
+            @buffer[screen_y * 240 + screen_x] = @palram[i] | (@palram[i + 1] << 8)
+          end
         end
       end
     end
