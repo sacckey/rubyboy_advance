@@ -152,18 +152,22 @@ module RubyboyAdvance
           screen_y = (obj[:y] + y) & 0xFF
           next if screen_y >= 160
 
+          tex_y = obj[:rotate] == 0 && obj[:yflip] == 1 ? height - 1 - y : y
+
           width.times do |x|
             screen_x = (obj[:x] + x) & 0x1FF
             next if screen_x >= 240
 
+            tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
+
             tile_number = if is_1d
-                            (obj[:tile] + (y >> 3) * (width >> 3) + (x >> 3)) & 0x3FF
+                            (obj[:tile] + (tex_y >> 3) * (width >> 3) + (tex_x >> 3)) & 0x3FF
                           else
-                            ((obj[:tile] + ((y >> 3) << 5)) & 0x3E0) | ((obj[:tile] + (x >> 3)) & 0x1F)
+                            ((obj[:tile] + ((tex_y >> 3) << 5)) & 0x3E0) | ((obj[:tile] + (tex_x >> 3)) & 0x1F)
                           end
 
-            pixel = @vram[0x10000 + (tile_number << 5) + ((y & 7) << 2) + ((x & 7) >> 1)]
-            color = x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+            pixel = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 2) + ((tex_x & 7) >> 1)]
+            color = tex_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
             next if color == 0
 
             i = 0x200 + (((obj[:bank] << 4) + color) << 1)

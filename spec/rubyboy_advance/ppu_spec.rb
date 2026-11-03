@@ -353,6 +353,57 @@ RSpec.describe RubyboyAdvance::Ppu do
           expect(ppu.buffer[0, 8]).to eq([0x2222] * 4 + [0x4444] * 2 + [0x1111] * 2)
         end
       end
+
+      describe 'flips' do
+        let(:none) { 0x7FFF } # the backdrop: nothing is drawn there
+
+        # The colors at rows 0, 7, 8 and 15 and columns 0, 7, 8 and 15: the corners of the four 8x8 blocks of a 16x16 OBJ
+        def corners
+          [0, 7, 8, 15].map { |y| [0, 7, 8, 15].map { |x| ppu.buffer[y * 240 + x] } }
+        end
+
+        before do
+          # Each tile has its color at row 0, column 0 only, so a flip moves it to another corner of its block
+          { 1 => 1, 2 => 2, 3 => 3, 4 => 4, 33 => 5, 34 => 6 }.each do |tile, color|
+            8.times { |row| bus.write32(0x0601_0000 + tile * 32 + row * 4, row.zero? ? color : 0) }
+          end
+          16.times { |color| bus.write16(0x0500_0200 + color * 2, color) } # OBJ bank 0 color c reads as c
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+        end
+
+        it 'mirrors the whole OBJ left to right with attr1 bit 12' do
+          write_obj(0, 0, 0x5000, 1) # 16x16, horizontal flip, tile 1
+
+          ppu.step(1232 * 160)
+
+          expect(corners).to eq([[none, 2, none, 1], [none] * 4, [none, 4, none, 3], [none] * 4])
+        end
+
+        it 'mirrors the whole OBJ top to bottom with attr1 bit 13' do
+          write_obj(0, 0, 0x6000, 1) # 16x16, vertical flip, tile 1
+
+          ppu.step(1232 * 160)
+
+          expect(corners).to eq([[none] * 4, [3, none, 4, none], [none] * 4, [1, none, 2, none]])
+        end
+
+        it 'flips which tiles 2D mapping takes too' do
+          bus.write16(0x0400_0000, 0x1000) # DISPCNT: mode 0, OBJ on, 2D mapping
+          write_obj(0, 0, 0x7000, 1) # 16x16, both flips, tile 1: tiles 1, 2 / 33, 34
+
+          ppu.step(1232 * 160)
+
+          expect(corners).to eq([[none] * 4, [none, 6, none, 5], [none] * 4, [none, 2, none, 1]])
+        end
+
+        it 'ignores bits 12 and 13 on an affine OBJ' do
+          write_obj(0, 0x0100, 0x7000, 1) # affine, 16x16, tile 1; bits 12 and 13 belong to the affine parameter number
+
+          ppu.step(1232 * 160)
+
+          expect(corners).to eq([[1, none, 2, none], [none] * 4, [3, none, 4, none], [none] * 4])
+        end
+      end
     end
   end
 
