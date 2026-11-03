@@ -84,6 +84,66 @@ RSpec.describe RubyboyAdvance::Ppu do
         expect(ppu.buffer[0, 3]).to eq([0x4444, 0x4444, 0x1111])
       end
     end
+
+    describe 'scrolling' do
+      before do
+        bus.write16(0x0400_0000, 0x0100) # DISPCNT: mode 0, BG0 on
+        bus.write16(0x0400_0008, 0x0100) # BG0CNT: 256x256, tiles at 0x06000000, map at 0x06000800
+        bus.write16(0x0500_0000, 0x1111) # backdrop
+        8.times { |color| bus.write16(0x0500_0002 + color * 2, color + 1) } # bank 0 color c reads as c
+      end
+
+      it 'moves the screen by BG0HOFS and BG0VOFS pixels, inside a tile too' do
+        bus.write32(0x0600_0008, 0x8765_4321) # tile 0 row 2: column c is color c + 1; every map entry is tile 0
+        bus.write16(0x0400_0010, 3) # BG0HOFS
+        bus.write16(0x0400_0012, 2) # BG0VOFS
+
+        ppu.step(1232 * 160)
+
+        expect(ppu.buffer[0, 2]).to eq([4, 5]) # map (3, 2) and (4, 2)
+        expect(ppu.buffer[240]).to eq(0x1111) # map (3, 3): row 3 of tile 0 is color 0
+      end
+
+      it 'wraps around the edges of the map' do
+        bus.write16(0x0600_0800, 0x0001) # map entry (0, 0): tile 1; every other entry is the empty tile 0
+        8.times { |row| bus.write32(0x0600_0020 + row * 4, 0x1111_1111) } # tile 1: all color 1
+        bus.write16(0x0400_0010, 252) # BG0HOFS
+        bus.write16(0x0400_0012, 255) # BG0VOFS
+
+        ppu.step(1232 * 160)
+
+        expect(ppu.buffer[240 + 3, 2]).to eq([0x1111, 1]) # map (255, 0) and (0, 0)
+        expect(ppu.buffer[4]).to eq(0x1111) # map (0, 255)
+      end
+    end
+
+    describe 'map sizes' do
+      before do
+        bus.write16(0x0400_0000, 0x0100) # DISPCNT: mode 0, BG0 on
+        4.times do |block|
+          bus.write16(0x0600_4000 + block * 0x800, block + 1) # top-left entry of each 32x32-tile block: tile block + 1
+          8.times { |row| bus.write32(0x0600_0000 + ((block + 1) << 5) + row * 4, 0x1111_1111 * (block + 1)) }
+          bus.write16(0x0500_0002 + block * 2, block + 1) # bank 0 color c reads as c
+        end
+      end
+
+      [
+        [0, 256, 0, 0], [0, 0, 256, 0],
+        [1, 256, 0, 1], [1, 0, 256, 0],
+        [2, 256, 0, 0], [2, 0, 256, 1],
+        [3, 256, 0, 1], [3, 0, 256, 2], [3, 256, 256, 3]
+      ].each do |size, hofs, vofs, block|
+        it "shows block #{block} at map (#{hofs}, #{vofs}) when BG0CNT size is #{size}" do
+          bus.write16(0x0400_0008, (size << 14) | (8 << 8)) # BG0CNT: tiles at 0x06000000, map at 0x06004000
+          bus.write16(0x0400_0010, hofs) # BG0HOFS
+          bus.write16(0x0400_0012, vofs) # BG0VOFS
+
+          ppu.step(1232 * 160)
+
+          expect(ppu.buffer[0]).to eq(block + 1) # tile block + 1 is all color block + 1
+        end
+      end
+    end
   end
 
   describe 'VBlank interrupt' do
