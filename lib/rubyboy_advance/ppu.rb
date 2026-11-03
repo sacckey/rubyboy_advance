@@ -129,9 +129,16 @@ module RubyboyAdvance
           tile_x = tile_map[10] == 1 ? 7 - (map_x & 7) : map_x & 7
           palette_index = tile_map >> 12
           tile_index = tile_map & 0x03FF
-          pixel_index = char_base + (tile_index << 5) + (tile_y << 2) + (tile_x >> 1)
-          pixel = @vram[pixel_index]
-          color = tile_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+          if bgncnt[7] == 0
+            pixel_index = char_base + (tile_index << 5) + (tile_y << 2) + (tile_x >> 1)
+            pixel = @vram[pixel_index]
+            color = tile_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+          else
+            palette_index = 0
+            pixel_index = char_base + (tile_index << 6) + (tile_y << 3) + tile_x
+            color = pixel_index >= 0x10000 ? 0 : @vram[pixel_index]
+          end
+
           next if color == 0
 
           i = ((palette_index << 4) + color) << 1
@@ -160,6 +167,7 @@ module RubyboyAdvance
         next if obj[:shape] == 3
 
         width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
+        bank = obj[:color256] == 0 ? obj[:bank] : 0
 
         height.times do |y|
           screen_y = (obj[:y] + y) & 0xFF
@@ -176,18 +184,28 @@ module RubyboyAdvance
             index = screen_y * 240 + screen_x
             next unless obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
 
-            tile_number = if is_1d
-                            (obj[:tile] + (tex_y >> 3) * (width >> 3) + (tex_x >> 3)) & 0x3FF
-                          else
-                            ((obj[:tile] + ((tex_y >> 3) << 5)) & 0x3E0) | ((obj[:tile] + (tex_x >> 3)) & 0x1F)
-                          end
+            if obj[:color256] == 0
+              tile_number = if is_1d
+                              (obj[:tile] + (tex_y >> 3) * (width >> 3) + (tex_x >> 3)) & 0x3FF
+                            else
+                              ((obj[:tile] + ((tex_y >> 3) << 5)) & 0x3E0) | ((obj[:tile] + (tex_x >> 3)) & 0x1F)
+                            end
 
-            pixel = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 2) + ((tex_x & 7) >> 1)]
-            color = tex_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+              pixel = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 2) + ((tex_x & 7) >> 1)]
+              color = tex_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+            else
+              tile_number = if is_1d
+                              (obj[:tile] + (tex_y >> 3) * (width >> 2) + ((tex_x >> 3) << 1)) & 0x3FF
+                            else
+                              ((obj[:tile] + ((tex_y >> 3) << 5)) & 0x3E0) | (((obj[:tile] & ~1) + ((tex_x >> 3) << 1)) & 0x1F)
+                            end
+
+              color = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 3) + (tex_x & 7)]
+            end
             obj_priorities[index] = obj[:priority]
             next if color == 0
 
-            i = 0x200 + (((obj[:bank] << 4) + color) << 1)
+            i = 0x200 + (((bank << 4) + color) << 1)
             obj_colors[index] = @palram[i] | (@palram[i + 1] << 8)
           end
         end
@@ -203,6 +221,7 @@ module RubyboyAdvance
           y: @oam[base],
           rotate: @oam[base + 1][0],
           invisible: @oam[base + 1][1],
+          color256: @oam[base + 1][5],
           shape: @oam[base + 1] >> 6,
           x: @oam[base + 2] | (@oam[base + 3][0] << 8),
           xflip: @oam[base + 3][4],
