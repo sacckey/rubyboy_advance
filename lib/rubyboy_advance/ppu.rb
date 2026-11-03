@@ -36,8 +36,14 @@ module RubyboyAdvance
           when 0
             @buffer.fill(@palram[0] | (@palram[1] << 8))
             bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
-            bgs.sort_by { |n| [-(read_io16(8 + n * 2) & 0b11), -n] }.each { |n| draw_bg(n) }
-            draw_objs if dispcnt[12] == 1
+            bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
+            objs = read_objs
+            3.downto(0) do |priority|
+              (bgs_by_priority[priority] || []).sort.reverse.each do |n|
+                draw_bg(n)
+              end
+              draw_objs(objs, priority) if dispcnt[12] == 1
+            end
           when 3
             (160 * 240).times do |i|
               @buffer[i] = @vram[i << 1] | (@vram[(i << 1) + 1] << 8)
@@ -132,29 +138,13 @@ module RubyboyAdvance
       end
     end
 
-    def draw_objs
-      objs = 128.times.map do |i|
-        base = i * 8
-        {
-          y: @oam[base],
-          rotate: @oam[base + 1][0],
-          invisible: @oam[base + 1][1],
-          shape: @oam[base + 1] >> 6,
-          x: @oam[base + 2] | (@oam[base + 3][0] << 8),
-          xflip: @oam[base + 3][4],
-          yflip: @oam[base + 3][5],
-          size: @oam[base + 3] >> 6,
-          tile: @oam[base + 4] | ((@oam[base + 5] & 0b11) << 8),
-          priority: (@oam[base + 5] >> 2) & 0b11,
-          bank: @oam[base + 5] >> 4
-        }
-      end
-
+    def draw_objs(objs, priority)
       is_1d = read_io16(0)[6] == 1
 
       objs.reverse_each do |obj|
         next if obj[:rotate] == 0 && obj[:invisible] == 1
         next if obj[:shape] == 3
+        next if obj[:priority] != priority
 
         width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
 
@@ -180,6 +170,25 @@ module RubyboyAdvance
             @buffer[screen_y * 240 + screen_x] = @palram[i] | (@palram[i + 1] << 8)
           end
         end
+      end
+    end
+
+    def read_objs
+      128.times.map do |i|
+        base = i * 8
+        {
+          y: @oam[base],
+          rotate: @oam[base + 1][0],
+          invisible: @oam[base + 1][1],
+          shape: @oam[base + 1] >> 6,
+          x: @oam[base + 2] | (@oam[base + 3][0] << 8),
+          xflip: @oam[base + 3][4],
+          yflip: @oam[base + 3][5],
+          size: @oam[base + 3] >> 6,
+          tile: @oam[base + 4] | ((@oam[base + 5] & 0b11) << 8),
+          priority: (@oam[base + 5] >> 2) & 0b11,
+          bank: @oam[base + 5] >> 4
+        }
       end
     end
 

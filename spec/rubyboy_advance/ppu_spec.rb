@@ -302,6 +302,57 @@ RSpec.describe RubyboyAdvance::Ppu do
           expect(blocks(2, 2)).to eq([[5, 10], [8, 11]]) # tiles 31, 0 / 63, 32
         end
       end
+
+      describe 'priority' do
+        def enable_bg0(priority)
+          bus.write16(0x0400_0000, 0x1100) # DISPCNT: mode 0, BG0 and OBJ on
+          bus.write16(0x0400_0008, 0x0004 | priority) # BG0CNT: tiles at 0x06004000, map at 0x06000000 (every entry tile 0)
+        end
+
+        before do
+          bus.write32(0x0600_4000, 0x1111_1111) # BG tile 0 row 0: all color 1
+          bus.write16(0x0500_0002, 0x4444) # BG bank 0 color 1
+        end
+
+        [[1, 1, 0x1111], [1, 2, 0x4444], [2, 1, 0x1111]].each do |bg_priority, obj_priority, color|
+          it "shows #{color == 0x1111 ? 'the OBJ' : 'BG0'} when BG0 has priority #{bg_priority} and the OBJ #{obj_priority}" do
+            enable_bg0(bg_priority)
+            write_obj(0, 0, 0, 1 | (obj_priority << 10)) # y 0, x 0, tile 1
+
+            ppu.step(1232 * 160)
+
+            expect(ppu.buffer[0]).to eq(color)
+          end
+        end
+
+        it 'draws OBJs at a priority no BG uses' do
+          write_obj(0, 0, 0, 1 | (3 << 10)) # y 0, x 0, tile 1, priority 3; no BG is on
+
+          ppu.step(1232 * 160)
+
+          expect(ppu.buffer[0]).to eq(0x1111)
+        end
+
+        it 'puts the OBJ with the lower priority value in front, whatever its OBJ number' do
+          write_obj(0, 0, 0, 1 | (2 << 10)) # y 0, x 0, tile 1, priority 2
+          write_obj(1, 0, 0, 2 | (1 << 10)) # y 0, x 0, tile 2, priority 1
+
+          ppu.step(1232 * 160)
+
+          expect(ppu.buffer[0]).to eq(0x2222)
+        end
+
+        it 'puts a BG between OBJs of different priorities' do
+          enable_bg0(1)
+          bus.write32(0x0600_4000, 0x1111_0000) # BG tile 0 row 0: x = 0-3 color 0, x = 4-7 color 1
+          write_obj(0, 0, 0, 2 | (2 << 10)) # y 0, x 0, tile 2, priority 2: behind BG0
+          write_obj(1, 0, 6, 1) # y 0, x 6, tile 1, priority 0: in front of BG0
+
+          ppu.step(1232 * 160)
+
+          expect(ppu.buffer[0, 8]).to eq([0x2222] * 4 + [0x4444] * 2 + [0x1111] * 2)
+        end
+      end
     end
   end
 
