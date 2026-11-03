@@ -145,6 +145,46 @@ RSpec.describe RubyboyAdvance::Ppu do
       end
     end
 
+    describe 'tile flips' do
+      # [y, x] of every pixel drawn inside the 8x8 block of map entry (0, 0)
+      def drawn
+        8.times.flat_map { |y| 8.times.filter_map { |x| [y, x] if ppu.buffer[y * 240 + x] != 0x1111 } }
+      end
+
+      before do
+        bus.write16(0x0400_0000, 0x0100) # DISPCNT: mode 0, BG0 on
+        bus.write16(0x0400_0008, 0x0104) # BG0CNT: tiles at 0x06004000, map at 0x06000800
+        bus.write16(0x0600_4020, 0x0001) # tile 1: color 1 at row 0, column 0 only
+        bus.write16(0x0600_4040, 0x0002) # tile 2: color 2 at row 0, column 0 only
+        bus.write16(0x0500_0000, 0x1111) # backdrop
+        bus.write16(0x0500_0002, 0x3333) # bank 0 color 1
+        bus.write16(0x0500_0004, 0x4444) # bank 0 color 2
+      end
+
+      {
+        'no flip' => [0x0001, [0, 0]],
+        'a horizontal flip (bit 10)' => [0x0401, [0, 7]],
+        'a vertical flip (bit 11)' => [0x0801, [7, 0]],
+        'both flips' => [0x0C01, [7, 7]]
+      }.each do |flip, (entry, pixel)|
+        it "moves the pixel of the tile to #{pixel.inspect} with #{flip}" do
+          bus.write16(0x0600_0800, entry) # map entry (0, 0): tile 1
+
+          ppu.step(1232 * 160)
+
+          expect(drawn).to eq([pixel])
+        end
+      end
+
+      it 'keeps the flip bits out of the tile number' do
+        bus.write16(0x0600_0800, 0x0402) # map entry (0, 0): tile 2, horizontal flip
+
+        ppu.step(1232 * 160)
+
+        expect(ppu.buffer[7]).to eq(0x4444)
+      end
+    end
+
     describe 'OBJ' do
       def write_obj(index, attr0, attr1, attr2)
         bus.write16(0x0700_0000 + index * 8, attr0)
