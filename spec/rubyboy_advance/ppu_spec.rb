@@ -226,6 +226,82 @@ RSpec.describe RubyboyAdvance::Ppu do
         expect([ppu.buffer[240 * 3], ppu.buffer[240 * 4]]).to eq([0x1111, 0x7FFF])
         expect(ppu.buffer[240 * 8 + 44]).to eq(0x7FFF)
       end
+
+      describe 'sizes' do
+        # The color at the top-left pixel of each 8x8 block of the screen, row by row
+        def blocks(columns, rows)
+          rows.times.map { |row| columns.times.map { |column| ppu.buffer[row * 8 * 240 + column * 8] } }
+        end
+
+        before do
+          # Only row 0 of these tiles is colored and every other tile is empty,
+          # so reading a wrong tile or a wrong row shows the backdrop or a different color
+          {
+            0 => 10, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 12, 6 => 13, 7 => 14, 8 => 15,
+            31 => 5, 32 => 11, 33 => 6, 34 => 7, 63 => 8, 1023 => 9
+          }.each { |tile, color| bus.write32(0x0601_0000 + tile * 32, 0x1111_1111 * color) }
+          16.times { |color| bus.write16(0x0500_0200 + color * 2, color) } # OBJ bank 0 color c reads as c
+        end
+
+        [
+          [0, 0, 8, 8], [0, 1, 16, 16], [0, 2, 32, 32], [0, 3, 64, 64],
+          [1, 0, 16, 8], [1, 1, 32, 8], [1, 2, 32, 16], [1, 3, 64, 32],
+          [2, 0, 8, 16], [2, 1, 8, 32], [2, 2, 16, 32], [2, 3, 32, 64]
+        ].each do |shape, size, width, height|
+          it "is #{width}x#{height} for shape #{shape} and size #{size}" do
+            64.times { |tile| 8.times { |row| bus.write32(0x0601_0000 + tile * 32 + row * 4, 0x1111_1111) } }
+            bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+            write_obj(0, shape << 14, size << 14, 0) # y 0, x 0, tile 0
+
+            ppu.step(1232 * 160)
+
+            drawn = (0...(240 * 160)).reject { |i| ppu.buffer[i] == 0x7FFF }
+            expect([drawn.map { |i| i % 240 }.max + 1, drawn.map { |i| i / 240 }.max + 1]).to eq([width, height])
+          end
+        end
+
+        it 'skips shape 3' do
+          write_obj(0, 0xC000, 0, 1) # shape 3, tile 1
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(1, 1)).to eq([[0x7FFF]])
+        end
+
+        it 'takes the tiles of each row one after another in 1D mapping' do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          write_obj(0, 0x4000, 0x8000, 1) # 32x16, tile 1
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(5, 3)).to eq([[1, 2, 3, 4, 0x7FFF], [12, 13, 14, 15, 0x7FFF], [0x7FFF] * 5]) # tiles 1-4 / 5-8
+        end
+
+        it 'takes the next row of tiles 32 tiles later in 2D mapping' do
+          write_obj(0, 0, 0x4000, 1) # 16x16, tile 1
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(3, 3)).to eq([[1, 2, 0x7FFF], [6, 7, 0x7FFF], [0x7FFF] * 3]) # tiles 1, 2 / 33, 34
+        end
+
+        it 'wraps the tile number at 1024 in 1D mapping' do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          write_obj(0, 0, 0x4000, 1023) # 16x16, tile 1023
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(2, 2)).to eq([[9, 10], [1, 2]]) # tiles 1023, 0 / 1, 2
+        end
+
+        it 'wraps within a row of 32 tiles in 2D mapping' do
+          write_obj(0, 0, 0x4000, 31) # 16x16, tile 31
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(2, 2)).to eq([[5, 10], [8, 11]]) # tiles 31, 0 / 63, 32
+        end
+      end
     end
   end
 

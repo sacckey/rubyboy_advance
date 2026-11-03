@@ -4,6 +4,12 @@ module RubyboyAdvance
   class Ppu
     attr_reader :buffer
 
+    OBJ_SIZES = [ # [shape][size] = [width, height]
+      [[8, 8], [16, 16], [32, 32], [64, 64]],
+      [[16, 8], [32, 8], [32, 16], [64, 32]],
+      [[8, 16], [8, 32], [16, 32], [32, 64]]
+    ].freeze
+
     def initialize(interrupt)
       @cycles = 0
       @io = Array.new(0x60, 0)
@@ -144,18 +150,29 @@ module RubyboyAdvance
         }
       end
 
+      is_1d = read_io16(0)[6] == 1
+
       objs.reverse_each do |obj|
         next if obj[:rotate] == 0 && obj[:invisible] == 1
+        next if obj[:shape] == 3
 
-        8.times do |y|
+        width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
+
+        height.times do |y|
           screen_y = (obj[:y] + y) & 0xFF
           next if screen_y >= 160
 
-          8.times do |x|
+          width.times do |x|
             screen_x = (obj[:x] + x) & 0x1FF
             next if screen_x >= 240
 
-            pixel = @vram[0x10000 + (obj[:tile] << 5) + (y << 2) + (x >> 1)]
+            tile_number = if is_1d
+                            (obj[:tile] + (y >> 3) * (width >> 3) + (x >> 3)) & 0x3FF
+                          else
+                            ((obj[:tile] + ((y >> 3) << 5)) & 0x3E0) | ((obj[:tile] + (x >> 3)) & 0x1F)
+                          end
+
+            pixel = @vram[0x10000 + (tile_number << 5) + ((y & 7) << 2) + ((x & 7) >> 1)]
             color = x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
             next if color == 0
 
