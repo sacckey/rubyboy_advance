@@ -125,11 +125,13 @@ module RubyboyAdvance
           block = (map_x >> 8) + (map_y >> 8) * (size[0] == 0 ? 1 : 2)
           tile_map_index = map_base + (block << 11) + (((((map_y & 0xFF) >> 3) << 5) + ((map_x & 0xFF) >> 3)) << 1)
           tile_map = @vram[tile_map_index] | (@vram[tile_map_index + 1] << 8)
+          tile_y = tile_map[11] == 1 ? 7 - (map_y & 7) : map_y & 7
+          tile_x = tile_map[10] == 1 ? 7 - (map_x & 7) : map_x & 7
           palette_index = tile_map >> 12
           tile_index = tile_map & 0x03FF
-          pixel_index = char_base + (tile_index << 5) + ((map_y & 7) << 2) + ((map_x & 7) >> 1)
+          pixel_index = char_base + (tile_index << 5) + (tile_y << 2) + (tile_x >> 1)
           pixel = @vram[pixel_index]
-          color = map_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+          color = tile_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
           next if color == 0
 
           i = ((palette_index << 4) + color) << 1
