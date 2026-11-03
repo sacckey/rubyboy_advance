@@ -352,6 +352,27 @@ RSpec.describe RubyboyAdvance::Ppu do
 
           expect(ppu.buffer[0, 8]).to eq([0x2222] * 4 + [0x4444] * 2 + [0x1111] * 2)
         end
+
+        it 'lifts an OBJ in front of a BG where a later transparent OBJ with a lower priority value covers it' do
+          enable_bg0(1)
+          write_obj(0, 0, 0, 1 | (2 << 10)) # y 0, x 0, tile 1, priority 2: behind BG0
+          write_obj(1, 0, 4, 0) # y 0, x 4, tile 0 (all color 0), priority 0
+
+          ppu.step(1232 * 160)
+
+          expect(ppu.buffer[0, 8]).to eq([0x4444] * 4 + [0x1111] * 4) # OBJ 0 keeps its color at priority 0 under OBJ 1
+        end
+
+        it 'gives a pixel a transparent OBJ left to a later opaque OBJ at that OBJ priority' do
+          enable_bg0(1)
+          bus.write32(0x0600_4000, 0x1111_0000) # BG tile 0 row 0: x = 0-3 color 0, x = 4-7 color 1
+          write_obj(0, 0, 0, 0) # y 0, x 0, tile 0 (all color 0), priority 0
+          write_obj(1, 0, 0, 1 | (2 << 10)) # y 0, x 0, tile 1, priority 2
+
+          ppu.step(1232 * 160)
+
+          expect(ppu.buffer[0, 8]).to eq([0x1111] * 4 + [0x4444] * 4) # OBJ 1 is drawn, and stays behind BG0
+        end
       end
 
       describe 'flips' do

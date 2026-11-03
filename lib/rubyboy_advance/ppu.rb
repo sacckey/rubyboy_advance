@@ -37,12 +37,12 @@ module RubyboyAdvance
             @buffer.fill(@palram[0] | (@palram[1] << 8))
             bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
             bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
-            objs = read_objs
+            obj_colors, obj_priorities = dispcnt[12] == 1 ? render_objs(read_objs) : [{}, {}]
             3.downto(0) do |priority|
               (bgs_by_priority[priority] || []).sort.reverse.each do |n|
                 draw_bg(n)
               end
-              draw_objs(objs, priority) if dispcnt[12] == 1
+              draw_objs(obj_colors, obj_priorities, priority)
             end
           when 3
             (160 * 240).times do |i|
@@ -138,13 +138,24 @@ module RubyboyAdvance
       end
     end
 
-    def draw_objs(objs, priority)
+    def draw_objs(obj_colors, obj_priorities, priority)
+      obj_colors.each do |index, color|
+        @buffer[index] = color if obj_priorities[index] == priority
+      end
+    end
+
+    # Merges all OBJs into one layer keyed by screen index before it meets the BGs, as the hardware does.
+    # In OAM order a pixel goes to a lower priority value, or to any OBJ while it is still transparent.
+    # A transparent pixel keeps the color under it but still sets the priority, so it can lift an OBJ
+    # with a lower number in front of a BG (NanoBoyAdvance sprite.cc).
+    def render_objs(objs)
+      obj_colors = {}
+      obj_priorities = {}
       is_1d = read_io16(0)[6] == 1
 
-      objs.reverse_each do |obj|
+      objs.each do |obj|
         next if obj[:rotate] == 0 && obj[:invisible] == 1
         next if obj[:shape] == 3
-        next if obj[:priority] != priority
 
         width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
 
@@ -160,6 +171,9 @@ module RubyboyAdvance
 
             tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
 
+            index = screen_y * 240 + screen_x
+            next unless obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
+
             tile_number = if is_1d
                             (obj[:tile] + (tex_y >> 3) * (width >> 3) + (tex_x >> 3)) & 0x3FF
                           else
@@ -168,13 +182,16 @@ module RubyboyAdvance
 
             pixel = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 2) + ((tex_x & 7) >> 1)]
             color = tex_x[0] == 0 ? (pixel & 0x0F) : (pixel >> 4)
+            obj_priorities[index] = obj[:priority]
             next if color == 0
 
             i = 0x200 + (((obj[:bank] << 4) + color) << 1)
-            @buffer[screen_y * 240 + screen_x] = @palram[i] | (@palram[i + 1] << 8)
+            obj_colors[index] = @palram[i] | (@palram[i + 1] << 8)
           end
         end
       end
+
+      [obj_colors, obj_priorities]
     end
 
     def read_objs
