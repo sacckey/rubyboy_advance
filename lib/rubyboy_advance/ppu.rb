@@ -103,8 +103,8 @@ module RubyboyAdvance
       size = bgncnt >> 14 # 0: 256×256, 1: 512×256, 2: 256×512, 3: 512×512
       char_base = bgncnt[2..3] << 14
       map_base  = bgncnt[8..12] << 11
-      hofs = read_io16(0x10 + n * 4) & 0x1FF
-      vofs = read_io16(0x12 + n * 4) & 0x1FF
+      hofs = read_io16(0x10 + n * 4)
+      vofs = read_io16(0x12 + n * 4)
       160.times do |y|
         map_y = (y + vofs) & (size[1] == 0 ? 0xFF : 0x1FF)
         240.times do |x|
