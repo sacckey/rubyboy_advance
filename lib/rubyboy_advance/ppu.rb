@@ -200,7 +200,8 @@ module RubyboyAdvance
                               ((obj[:tile] + ((tex_y >> 3) << 5)) & 0x3E0) | (((obj[:tile] & ~1) + ((tex_x >> 3) << 1)) & 0x1F)
                             end
 
-              color = @vram[0x10000 + (tile_number << 5) + ((tex_y & 7) << 3) + (tex_x & 7)]
+              # Tile 1023 runs past the end of VRAM, so the address wraps within the OBJ tiles (mGBA software-obj.c)
+              color = @vram[0x10000 + (((tile_number << 5) + ((tex_y & 7) << 3) + (tex_x & 7)) & 0x7FFF)]
             end
             obj_priorities[index] = obj[:priority]
             next if color == 0

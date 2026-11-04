@@ -545,6 +545,17 @@ RSpec.describe RubyboyAdvance::Ppu do
           expect(blocks(1, 2)).to eq([[1], [2]]) # tiles 1022 / 0
         end
 
+        it 'wraps past the end of the OBJ tiles to the start of them' do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          bus.write16(0x0601_7FE0, 0x0001) # tile 1023 row 0: x = 0 is color 1
+          bus.write16(0x0601_0000, 0x0002) # tile 0: the first byte is color 2
+          write_obj(0, 0x2000, 0, 1023) # 256 colors, 8x8, tile 1023
+
+          ppu.step(1232 * 160)
+
+          expect([ppu.buffer[0], ppu.buffer[240 * 4]]).to eq([1, 2]) # row 4 is at 0x06018000, which wraps to tile 0
+        end
+
         it 'starts from an even tile number and wraps within a row of 32 tiles in 2D mapping' do
           { 30 => 1, 0 => 2, 62 => 3, 32 => 4 }.each { |tile, color| bus.write16(0x0601_0000 + tile * 32, color) }
           write_obj(0, 0x2000, 0x4000, 31) # 256 colors, 16x16, tile 31
