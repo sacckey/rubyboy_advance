@@ -57,11 +57,11 @@ module RubyboyAdvance
                 @buffer[i] = @palram[palette_offset] | (@palram[palette_offset + 1] << 8)
               end
             end
-            @dma&.trigger(2)
           end
 
           self.hblank = true
           @interrupt.request(:hblank) if dispstat[4] == 1
+          @dma&.trigger(2) if vcount < 160 # after the flag, so a DMA reading DISPSTAT sees it
         end
 
         break unless @cycles >= 1232
@@ -73,11 +73,11 @@ module RubyboyAdvance
           res = true
           self.vblank = true
           @interrupt.request(:vblank) if dispstat[3] == 1
-          @dma&.trigger(1)
         end
 
         self.hblank = false
         update_vcount_match
+        @dma&.trigger(1) if vcount == 160 # once DISPSTAT is up to date for line 160
 
         @cycles -= 1232
       end

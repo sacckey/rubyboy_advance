@@ -149,6 +149,42 @@ RSpec.describe RubyboyAdvance::Dma do
       expect(halfwords(0x0300_0000, 1)).to eq([2]) # entry 1, not entry 0 again
     end
 
+    it 'keeps the count it was enabled with when CNT_L changes while it waits' do
+      start(0, 0x0200_0000, 0x0300_0000, 1, 0x9000) # VBlank, count 1
+      bus.write16(0x0400_00B8, 3) # CNT_L 3
+
+      ppu.step(1232 * 160)
+
+      expect(halfwords(0x0300_0000, 2)).to eq([0x1111, 0])
+    end
+
+    it 'reads CNT_L again as each repeat finishes' do
+      start(0, table, 0x0300_0000, 1, 0xA200) # HBlank, repeat, count 1
+      ppu.step(1007) # line 0 copies entry 0 and takes count 1 again
+      bus.write16(0x0400_00B8, 2) # CNT_L 2
+
+      ppu.step(1232 * 2) # line 1 still copies 1, line 2 copies 2
+
+      expect(halfwords(0x0300_0000, 5)).to eq([1, 2, 3, 4, 0])
+    end
+
+    it 'runs at HBlank after the HBlank flag turns on' do
+      start(0, 0x0400_0004, 0x0300_0000, 1, 0xA100) # HBlank, source fixed: DISPSTAT
+
+      ppu.step(1007)
+
+      expect(bus.read16(0x0300_0000)[1]).to eq(1)
+    end
+
+    it 'runs at VBlank after DISPSTAT is updated for line 160' do
+      bus.write16(0x0400_0004, 160 << 8) # LYC 160
+      start(0, 0x0400_0004, 0x0300_0000, 1, 0x9100) # VBlank, source fixed: DISPSTAT
+
+      ppu.step(1232 * 160)
+
+      expect(bus.read16(0x0300_0000) & 0b111).to eq(0b101) # VBlank on, HBlank off, VCOUNT match on
+    end
+
     it 'runs DMA0 before DMA1 at the same HBlank' do
       start(1, table, 0x0300_0000, 1, 0xA000) # HBlank: entry 0
       start(0, table + 2, 0x0300_0000, 1, 0xA000) # HBlank: entry 1

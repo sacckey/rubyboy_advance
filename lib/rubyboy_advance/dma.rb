@@ -11,6 +11,7 @@ module RubyboyAdvance
       @channels = [0, 0, 0, 0]
       @sads = [0, 0, 0, 0]
       @dads = [0, 0, 0, 0]
+      @counts = [0, 0, 0, 0]
     end
 
     def read(addr)
@@ -33,6 +34,7 @@ module RubyboyAdvance
 
       @sads[channel_index] = dma & SAD_MASKS[channel_index]
       @dads[channel_index] = (dma >> 32) & DAD_MASKS[channel_index]
+      @counts[channel_index] = count(dma, channel_index)
       transfer(channel_index) if (dma >> 92) & 0b11 == 0 # cnt_h bits 12-13: start timing
     end
 
@@ -46,9 +48,6 @@ module RubyboyAdvance
 
     def transfer(channel_index)
       dma = @channels[channel_index]
-      max = channel_index == 3 ? 0x10000 : 0x4000
-      cnt_l = (dma >> 64) & (max - 1)
-      cnt = cnt_l == 0 ? max : cnt_l
       cnt_h = (dma >> 80) & 0xFFFF
 
       halfword = cnt_h[10] == 0
@@ -60,7 +59,7 @@ module RubyboyAdvance
       dad = @dads[channel_index]
       sad_diff = step if (0x0800_0000...0x0E00_0000).cover?(sad) # Game Pak ROM is always read upward
 
-      cnt.times do
+      @counts[channel_index].times do
         value = halfword ? @bus.read16(sad) : @bus.read32(sad)
         halfword ? @bus.write16(dad, value) : @bus.write32(dad, value)
         sad += sad_diff
@@ -71,10 +70,19 @@ module RubyboyAdvance
       @dads[channel_index] = dad
 
       if cnt_h[9] == 1 && (cnt_h >> 12) & 3 != 0
+        # A repeat counts CNT_L as it is now; the source goes on (NanoBoyAdvance dma.cc RunChannel)
+        @counts[channel_index] = count(dma, channel_index)
         @dads[channel_index] = (dma >> 32) & DAD_MASKS[channel_index] if (cnt_h >> 5) & 3 == 3
       else
         @channels[channel_index] &= ~(1 << 95)
       end
+    end
+
+    # CNT_L, where 0 means the most the channel can move
+    def count(dma, channel_index)
+      max = channel_index == 3 ? 0x10000 : 0x4000
+      cnt_l = (dma >> 64) & (max - 1)
+      cnt_l == 0 ? max : cnt_l
     end
   end
 end
