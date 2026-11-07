@@ -19,13 +19,14 @@ interrupt = RubyboyAdvance::Interrupt.new
 ppu = RubyboyAdvance::Ppu.new(interrupt)
 timer = RubyboyAdvance::Timer.new(interrupt)
 keypad = RubyboyAdvance::Keypad.new(interrupt)
-cpu = RubyboyAdvance::Cpu.new(RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer, keypad))
+bus = RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer, keypad)
+cpu = RubyboyAdvance::Cpu.new(bus)
 lcd = RubyboyAdvance::Lcd.new
 begin
   loop do
     cycles = cpu.exec
     timer.step(cycles)
-    next unless ppu.step(cycles)
+    next unless ppu.step(cycles) { |timing| bus.run_dma(timing) }
 
     lcd.draw(ppu.buffer)
     break if lcd.window_should_close?

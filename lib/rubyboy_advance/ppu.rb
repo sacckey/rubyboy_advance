@@ -3,7 +3,6 @@
 module RubyboyAdvance
   class Ppu
     attr_reader :buffer
-    attr_writer :dma
 
     OBJ_SIZES = [ # [shape][size] = [width, height]
       [[8, 8], [16, 16], [32, 32], [64, 64]],
@@ -61,7 +60,7 @@ module RubyboyAdvance
 
           self.hblank = true
           @interrupt.request(:hblank) if dispstat[4] == 1
-          @dma&.trigger(2) if vcount < 160 # after the flag, so a DMA reading DISPSTAT sees it
+          yield :hblank if vcount < 160 # after the flag, so a DMA reading DISPSTAT sees it
         end
 
         break unless @cycles >= 1232
@@ -77,7 +76,7 @@ module RubyboyAdvance
 
         self.hblank = false
         update_vcount_match
-        @dma&.trigger(1) if vcount == 160 # once DISPSTAT is up to date for line 160
+        yield :vblank if vcount == 160 # once DISPSTAT is up to date for line 160
 
         @cycles -= 1232
       end
