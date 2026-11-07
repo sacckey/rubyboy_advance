@@ -5,9 +5,10 @@ module RubyboyAdvance
     # Address bits each channel uses: DMA0 cannot read the Game Pak, and only DMA3 can write to it.
     SAD_MASKS = [0x07FF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF].freeze
     DAD_MASKS = [0x07FF_FFFF, 0x07FF_FFFF, 0x07FF_FFFF, 0x0FFF_FFFF].freeze
+    START_TIMINGS = { vblank: 1, hblank: 2 }.freeze # DMAxCNT_H bits 12-13
 
-    def initialize(bus)
-      @bus = bus
+    # The bus comes in only for the calls that copy, so the DMA does not hold on to it
+    def initialize
       @channels = [0, 0, 0, 0]
       @sads = [0, 0, 0, 0]
       @dads = [0, 0, 0, 0]
@@ -21,7 +22,7 @@ module RubyboyAdvance
       (@channels[channel_index] >> (shift_amount * 8)) & 0xFF
     end
 
-    def write(addr, value)
+    def write(addr, value, bus)
       channel_index = (addr - 0x0B0) / 12
       shift_amount = (addr - 0x0B0) % 12
       before = @channels[channel_index][95]
@@ -35,18 +36,20 @@ module RubyboyAdvance
       @sads[channel_index] = dma & SAD_MASKS[channel_index]
       @dads[channel_index] = (dma >> 32) & DAD_MASKS[channel_index]
       @counts[channel_index] = count(dma, channel_index)
-      transfer(channel_index) if (dma >> 92) & 0b11 == 0 # cnt_h bits 12-13: start timing
+      transfer(channel_index, bus) if (dma >> 92) & 0b11 == 0 # cnt_h bits 12-13: start timing
     end
 
-    def trigger(timing)
+    def trigger(timing, bus)
+      start_timing = START_TIMINGS.fetch(timing)
       4.times do |channel_index|
-        transfer(channel_index) if @channels[channel_index][95] == 1 && (@channels[channel_index] >> 92) & 0b11 == timing
+        dma = @channels[channel_index]
+        transfer(channel_index, bus) if dma[95] == 1 && (dma >> 92) & 0b11 == start_timing
       end
     end
 
     private
 
-    def transfer(channel_index)
+    def transfer(channel_index, bus)
       dma = @channels[channel_index]
       cnt_h = (dma >> 80) & 0xFFFF
 
@@ -60,8 +63,8 @@ module RubyboyAdvance
       sad_diff = step if (0x0800_0000...0x0E00_0000).cover?(sad) # Game Pak ROM is always read upward
 
       @counts[channel_index].times do
-        value = halfword ? @bus.read16(sad) : @bus.read32(sad)
-        halfword ? @bus.write16(dad, value) : @bus.write32(dad, value)
+        value = halfword ? bus.read16(sad) : bus.read32(sad)
+        halfword ? bus.write16(dad, value) : bus.write32(dad, value)
         sad += sad_diff
         dad += dad_diff
       end

@@ -17,8 +17,7 @@ module RubyboyAdvance
       @ppu = ppu
       @interrupt = interrupt
       @bios = bios
-      @dma = Dma.new(self)
-      @ppu.dma = @dma
+      @dma = Dma.new
       @timer = timer
       @keypad = keypad
     end
@@ -96,6 +95,11 @@ module RubyboyAdvance
       end
     end
 
+    # Runs the DMA channels waiting for :vblank or :hblank, which the PPU yields from step
+    def run_dma(timing)
+      @dma.trigger(timing, self)
+    end
+
     private
 
     def write8(addr, value)
@@ -111,7 +115,7 @@ module RubyboyAdvance
         when 0x130, 0x131 then nil
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
         when 0x301 then @interrupt.write(offset, value) if @cpu.in_bios? # HALTCNT only works from the BIOS
-        when 0x0B0..0x0DF then @dma.write(offset, value)
+        when 0x0B0..0x0DF then @dma.write(offset, value, self)
         else @ioram[offset] = value
         end
       when 0x05 then @ppu.write_palram(addr, value)
