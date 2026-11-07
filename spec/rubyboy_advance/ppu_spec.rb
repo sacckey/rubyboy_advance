@@ -185,11 +185,58 @@ RSpec.describe RubyboyAdvance::Ppu do
       end
     end
 
+    describe '256 colors' do
+      before do
+        bus.write16(0x0400_0000, 0x0100) # DISPCNT: mode 0, BG0 on
+        bus.write16(0x0400_0008, 0x0180) # BG0CNT: 256 colors, tiles at 0x06000000, map at 0x06000800
+        256.times { |color| bus.write16(0x0500_0000 + color * 2, color) } # color c reads as c
+        bus.write16(0x0500_0000, 0x7FFF) # backdrop
+      end
+
+      it 'reads a byte per pixel from 64-byte tiles and ignores the palette bank' do
+        bus.write16(0x0600_0800, 0x1001) # map entry (0, 0): tile 1, palette bank 1
+        bus.write32(0x0600_0040, 0x0023_0021) # tile 1 row 0: x = 0 is color 0x21, x = 1 is 0, x = 2 is 0x23
+        bus.write16(0x0600_0048, 0x0081) # tile 1 row 1: x = 0 is color 0x81
+        bus.write16(0x0600_007E, 0xFF00) # tile 1 row 7: x = 7 is color 0xFF
+
+        ppu.step(1232 * 160)
+
+        expect([ppu.buffer[0, 3], ppu.buffer[240], ppu.buffer[240 * 7 + 7]]).to eq([[0x21, 0x7FFF, 0x23], 0x81, 0xFF])
+      end
+
+      it 'flips a tile by whole pixels' do
+        bus.write16(0x0600_0800, 0x0C01) # map entry (0, 0): tile 1, both flips
+        bus.write16(0x0600_0040, 0x2100) # tile 1 row 0: x = 1 is color 0x21
+
+        ppu.step(1232 * 160)
+
+        expect(ppu.buffer[240 * 7 + 6]).to eq(0x21)
+      end
+
+      it 'shows nothing for tile bytes at or past 0x06010000, where the OBJ tiles start' do
+        bus.write16(0x0400_0008, 0x018C) # BG0CNT: 256 colors, tiles at 0x0600C000, map at 0x06000800
+        bus.write16(0x0600_0800, 0x00FF) # map entry (0, 0): tile 255, the last one before 0x06010000
+        bus.write16(0x0600_0802, 0x0100) # map entry (1, 0): tile 256, at 0x06010000
+        bus.write16(0x0600_0804, 0x03FF) # map entry (2, 0): tile 1023, past the end of VRAM
+        bus.write16(0x0600_FFC0, 0x0021) # tile 255 row 0: x = 0 is color 0x21
+        bus.write16(0x0601_0000, 0x0021) # OBJ tile 0: the first byte is 0x21 too
+
+        ppu.step(1232 * 160)
+
+        expect([ppu.buffer[0], ppu.buffer[8], ppu.buffer[16]]).to eq([0x21, 0x7FFF, 0x7FFF])
+      end
+    end
+
     describe 'OBJ' do
       def write_obj(index, attr0, attr1, attr2)
         bus.write16(0x0700_0000 + index * 8, attr0)
         bus.write16(0x0700_0002 + index * 8, attr1)
         bus.write16(0x0700_0004 + index * 8, attr2)
+      end
+
+      # The color at the top-left pixel of each 8x8 block of the screen, row by row
+      def blocks(columns, rows)
+        rows.times.map { |row| columns.times.map { |column| ppu.buffer[row * 8 * 240 + column * 8] } }
       end
 
       before do
@@ -268,11 +315,6 @@ RSpec.describe RubyboyAdvance::Ppu do
       end
 
       describe 'sizes' do
-        # The color at the top-left pixel of each 8x8 block of the screen, row by row
-        def blocks(columns, rows)
-          rows.times.map { |row| columns.times.map { |column| ppu.buffer[row * 8 * 240 + column * 8] } }
-        end
-
         before do
           # Only row 0 of these tiles is colored and every other tile is empty,
           # so reading a wrong tile or a wrong row shows the backdrop or a different color
@@ -463,6 +505,64 @@ RSpec.describe RubyboyAdvance::Ppu do
           ppu.step(1232 * 160)
 
           expect(corners).to eq([[1, none, 2, none], [none] * 4, [3, none, 4, none], [none] * 4])
+        end
+      end
+
+      describe '256 colors' do
+        before do
+          0x20.times { |i| bus.write32(0x0601_0000 + i * 4, 0) } # clears OBJ tiles 0-3
+          256.times { |color| bus.write16(0x0500_0200 + color * 2, color) } # OBJ color c reads as c
+        end
+
+        it 'reads a byte per pixel from 64 bytes, two tile numbers, and ignores the palette bank' do
+          bus.write32(0x0601_0080, 0x0023_0021) # tile 4 row 0: x = 0 is color 0x21, x = 1 is 0, x = 2 is 0x23
+          bus.write16(0x0601_0088, 0x0081) # row 1: x = 0 is color 0x81
+          bus.write16(0x0601_00BE, 0xFF00) # row 7, in tile 5: x = 7 is color 0xFF
+          write_obj(0, 0x2000, 0, 0x1004) # y 0, x 0, 256 colors, tile 4, bank 1
+
+          ppu.step(1232 * 160)
+
+          expect([ppu.buffer[0, 3], ppu.buffer[240], ppu.buffer[240 * 7 + 7]]).to eq([[0x21, 0x7FFF, 0x23], 0x81, 0xFF])
+        end
+
+        it 'steps two tile numbers per block in 1D mapping' do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          { 3 => 1, 5 => 2, 7 => 3, 9 => 4 }.each { |tile, color| bus.write16(0x0601_0000 + tile * 32, color) }
+          write_obj(0, 0x2000, 0x4000, 3) # 256 colors, 16x16, tile 3
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(2, 2)).to eq([[1, 2], [3, 4]]) # tiles 3, 5 / 7, 9
+        end
+
+        it 'wraps the tile number at 1024 in 1D mapping' do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          { 1022 => 1, 0 => 2 }.each { |tile, color| bus.write16(0x0601_0000 + tile * 32, color) }
+          write_obj(0, 0xA000, 0, 1022) # 256 colors, 8x16, tile 1022
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(1, 2)).to eq([[1], [2]]) # tiles 1022 / 0
+        end
+
+        it 'wraps past the end of the OBJ tiles to the start of them' do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          bus.write16(0x0601_7FE0, 0x0001) # tile 1023 row 0: x = 0 is color 1
+          bus.write16(0x0601_0000, 0x0002) # tile 0: the first byte is color 2
+          write_obj(0, 0x2000, 0, 1023) # 256 colors, 8x8, tile 1023
+
+          ppu.step(1232 * 160)
+
+          expect([ppu.buffer[0], ppu.buffer[240 * 4]]).to eq([1, 2]) # row 4 is at 0x06018000, which wraps to tile 0
+        end
+
+        it 'starts from an even tile number and wraps within a row of 32 tiles in 2D mapping' do
+          { 30 => 1, 0 => 2, 62 => 3, 32 => 4 }.each { |tile, color| bus.write16(0x0601_0000 + tile * 32, color) }
+          write_obj(0, 0x2000, 0x4000, 31) # 256 colors, 16x16, tile 31
+
+          ppu.step(1232 * 160)
+
+          expect(blocks(2, 2)).to eq([[1, 2], [3, 4]]) # tiles 30, 0 / 62, 32
         end
       end
     end
