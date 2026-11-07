@@ -3,6 +3,7 @@
 module RubyboyAdvance
   class Ppu
     attr_reader :buffer
+    attr_writer :dma
 
     OBJ_SIZES = [ # [shape][size] = [width, height]
       [[8, 8], [16, 16], [32, 32], [64, 64]],
@@ -56,6 +57,7 @@ module RubyboyAdvance
                 @buffer[i] = @palram[palette_offset] | (@palram[palette_offset + 1] << 8)
               end
             end
+            @dma&.trigger(2)
           end
 
           self.hblank = true
@@ -71,6 +73,7 @@ module RubyboyAdvance
           res = true
           self.vblank = true
           @interrupt.request(:vblank) if dispstat[3] == 1
+          @dma&.trigger(1)
         end
 
         self.hblank = false

@@ -3,11 +3,12 @@
 RSpec.describe RubyboyAdvance::Dma do
   let(:rom) { [] }
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
+  let(:ppu) { RubyboyAdvance::Ppu.new(interrupt) }
   let(:bus) do
     RubyboyAdvance::Bus.new(
       rom,
       [],
-      RubyboyAdvance::Ppu.new(interrupt),
+      ppu,
       RubyboyAdvance::Sram.new,
       interrupt,
       RubyboyAdvance::Timer.new(interrupt),
@@ -87,5 +88,74 @@ RSpec.describe RubyboyAdvance::Dma do
 
     expect(halfwords(0x0300_0000, 3)).to eq([0, 0, 0])
     expect(bus.read16(0x0400_00BA)).to eq(0x9000)
+  end
+
+  it 'ignores the repeat bit of an immediate transfer' do
+    start(0, 0x0200_0000, 0x0300_0000, 1, 0x8200) # immediate, repeat
+
+    expect(bus.read16(0x0400_00BA)).to eq(0x0200)
+  end
+
+  describe 'at VBlank and HBlank' do
+    let(:table) { 0x0200_1000 }
+
+    before { 161.times { |i| bus.write16(table + (i * 2), i + 1) } } # entry i is i + 1
+
+    it 'copies as VBlank starts and clears the enable bit without repeat' do
+      start(0, 0x0200_0000, 0x0300_0000, 3, 0x9000) # VBlank
+      ppu.step(1232 * 160 - 1)
+      expect(halfwords(0x0300_0000, 1)).to eq([0])
+
+      ppu.step(1)
+
+      expect(halfwords(0x0300_0000, 4)).to eq([0x1111, 0x2222, 0x3333, 0])
+      expect(bus.read16(0x0400_00BA)).to eq(0x1000)
+    end
+
+    it 'copies at the HBlank of each visible line, going on from where it stopped' do
+      start(0, table, 0x0300_0000, 1, 0xA200) # HBlank, repeat
+      ppu.step(1007)
+      expect(halfwords(0x0300_0000, 2)).to eq([1, 0])
+
+      ppu.step(1232 * 228 - 1007)
+
+      expect(halfwords(0x0300_0000 + (159 * 2), 2)).to eq([160, 0]) # lines 0-159 only, none in VBlank
+    end
+
+    it 'puts the destination back for each repeat with destination control 3' do
+      start(3, table, 0x0300_0000, 1, 0xA260) # HBlank, repeat, destination reload
+
+      ppu.step(1232 + 1007) # through the HBlank of line 1
+
+      expect(halfwords(0x0300_0000, 2)).to eq([2, 0])
+    end
+
+    it 'copies at one HBlank only and clears the enable bit without repeat' do
+      start(0, table, 0x0300_0000, 1, 0xA000) # HBlank
+
+      ppu.step(1232 * 228)
+
+      expect(halfwords(0x0300_0000, 2)).to eq([1, 0])
+      expect(bus.read16(0x0400_00BA)).to eq(0x2000)
+    end
+
+    it 'keeps going when CNT_H is written again with the enable bit still on' do
+      start(0, table, 0x0300_0000, 1, 0xA260) # HBlank, repeat, destination reload
+      ppu.step(1232) # line 0 copies entry 0
+      bus.write16(0x0400_00BA, 0xA260)
+
+      ppu.step(1007)
+
+      expect(halfwords(0x0300_0000, 1)).to eq([2]) # entry 1, not entry 0 again
+    end
+
+    it 'runs DMA0 before DMA1 at the same HBlank' do
+      start(1, table, 0x0300_0000, 1, 0xA000) # HBlank: entry 0
+      start(0, table + 2, 0x0300_0000, 1, 0xA000) # HBlank: entry 1
+
+      ppu.step(1007)
+
+      expect(halfwords(0x0300_0000, 1)).to eq([1]) # DMA1 wrote last
+    end
   end
 end
