@@ -18,6 +18,7 @@ module RubyboyAdvance
       @oam = Array.new(0x400, 0)
       @buffer = Array.new(240 * 160, 0x7FFF)
       @interrupt = interrupt
+      update_vcount_match # line 0 already matches LYC 0
     end
 
     def step(cycles)
@@ -73,10 +74,7 @@ module RubyboyAdvance
         end
 
         self.hblank = false
-        before_match_flag = dispstat[2] == 1
-        after_match_flag = vcount == (dispstat >> 8)
-        self.vcount_match = after_match_flag
-        @interrupt.request(:vcount) if dispstat[5] == 1 && !before_match_flag && after_match_flag
+        update_vcount_match
 
         @cycles -= 1232
       end
@@ -98,6 +96,8 @@ module RubyboyAdvance
       when 6, 7 then nil # VCOUNT is read-only
       else @io[offset] = value
       end
+      # A new LYC takes effect at once, not at the next line (NanoBoyAdvance registers.cc)
+      update_vcount_match if offset == 5
     end
 
     def read_palram(addr)
@@ -288,6 +288,13 @@ module RubyboyAdvance
 
     def vcount_match=(value)
       @io[4] = value ? @io[4] | 4 : @io[4] & ~4
+    end
+
+    # The interrupt comes only as the flag turns on, whether VCOUNT or LYC changed
+    def update_vcount_match
+      match = vcount == (dispstat >> 8)
+      @interrupt.request(:vcount) if dispstat[5] == 1 && dispstat[2] == 0 && match
+      self.vcount_match = match
     end
 
     def vram_index(addr)

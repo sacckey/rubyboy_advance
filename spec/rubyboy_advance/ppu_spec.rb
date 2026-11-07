@@ -668,6 +668,22 @@ RSpec.describe RubyboyAdvance::Ppu do
       expect(dispstat[2]).to eq(0) # line 6
     end
 
+    it 'updates the VCOUNT match flag as soon as bits 8-15 change' do
+      bus.write16(0x0400_0004, 5 << 8) # LYC 5
+      ppu.step(1232 * 5) # line 5
+
+      bus.write16(0x0400_0004, 6 << 8) # LYC 6
+      expect(dispstat[2]).to eq(0)
+      bus.write16(0x0400_0004, 5 << 8) # LYC 5
+      expect(dispstat[2]).to eq(1)
+    end
+
+    it 'starts with the VCOUNT match flag on, since line 0 matches LYC 0' do
+      bus.write16(0x0400_0004, 0x0020) # DISPSTAT: VCOUNT IRQ on
+
+      expect([dispstat[2], bus.read16(0x0400_0202)]).to eq([1, 0])
+    end
+
     it 'counts VCOUNT from 227 back to 0 and matches line 0' do
       ppu.step(1232 * 227)
       expect(bus.read16(0x0400_0006)).to eq(227)
@@ -722,6 +738,35 @@ RSpec.describe RubyboyAdvance::Ppu do
       expect(bus.read16(0x0400_0202)).to eq(0)
       ppu.step(1)
       expect(bus.read16(0x0400_0202)).to eq(4)
+    end
+
+    it 'is requested again on the next line when the handler moves bits 8-15 there' do
+      bus.write16(0x0400_0004, (5 << 8) | 0x0020) # DISPSTAT: VCOUNT IRQ on, LYC 5
+      ppu.step(1232 * 5) # line 5
+      bus.write16(0x0400_0202, 0x0004) # the handler clears IF bit 2
+      bus.write16(0x0400_0004, (6 << 8) | 0x0020) # and sets LYC 6
+
+      ppu.step(1232) # line 6
+
+      expect(bus.read16(0x0400_0202)).to eq(4)
+    end
+
+    it 'is requested at once when bits 8-15 are set to the current line' do
+      bus.write16(0x0400_0004, 0x0020) # DISPSTAT: VCOUNT IRQ on, LYC 0
+      ppu.step(1232 * 5) # line 5
+
+      bus.write16(0x0400_0004, (5 << 8) | 0x0020) # LYC 5
+
+      expect(bus.read16(0x0400_0202)).to eq(4)
+    end
+
+    it 'is not requested when bit 5 is turned on during a line that already matches' do
+      bus.write16(0x0400_0004, 5 << 8) # LYC 5
+      ppu.step(1232 * 5) # line 5: the flag is already on
+
+      bus.write16(0x0400_0004, (5 << 8) | 0x0020) # DISPSTAT: VCOUNT IRQ on
+
+      expect(bus.read16(0x0400_0202)).to eq(0)
     end
   end
 end
