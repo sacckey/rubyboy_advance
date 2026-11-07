@@ -18,6 +18,7 @@ module RubyboyAdvance
       @interrupt = interrupt
       @bios = bios
       @dma = Dma.new(self)
+      @ppu.dma = @dma
       @timer = timer
       @keypad = keypad
     end
