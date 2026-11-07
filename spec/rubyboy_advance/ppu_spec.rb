@@ -568,6 +568,115 @@ RSpec.describe RubyboyAdvance::Ppu do
     end
   end
 
+  describe 'lines' do
+    it 'draws a line once, when its HBlank starts at cycle 1007' do
+      bus.write16(0x0500_0000, 0x1111) # backdrop
+      ppu.step(1006)
+      expect(ppu.buffer[0]).to eq(0x7FFF) # not drawn yet
+
+      ppu.step(1)
+      expect(ppu.buffer[0]).to eq(0x1111)
+
+      bus.write16(0x0500_0000, 0x2222) # the backdrop changes during the HBlank of line 0
+      ppu.step(1232 * 160 - 1007)
+      expect([ppu.buffer[239], ppu.buffer[240], ppu.buffer[240 * 160 - 1]]).to eq([0x1111, 0x2222, 0x2222])
+    end
+
+    it 'reads the BG scroll again for each line' do
+      bus.write16(0x0400_0000, 0x0100) # DISPCNT: mode 0, BG0 on
+      bus.write16(0x0400_0008, 0x0100) # BG0CNT: tiles at 0x06000000, map at 0x06000800
+      8.times { |row| bus.write32(0x0600_0000 + row * 4, 0x0000_0001) } # tile 0: x = 0 is color 1
+      bus.write16(0x0500_0000, 0x1111) # backdrop
+      bus.write16(0x0500_0002, 0x3333) # bank 0 color 1
+      ppu.step(1007)
+
+      bus.write16(0x0400_0010, 1) # BG0HOFS after line 0 is drawn
+      ppu.step(1232 * 160 - 1007)
+
+      expect([ppu.buffer[0], ppu.buffer[240], ppu.buffer[240 + 7]]).to eq([0x3333, 0x1111, 0x3333])
+    end
+
+    it 'copies each line of the mode 3 bitmap' do
+      bus.write16(0x0400_0000, 0x0003) # DISPCNT: mode 3
+      bus.write16(0x0600_0000 + (240 + 2) * 2, 0x1234) # pixel (2, 1)
+
+      ppu.step(1232 * 160)
+
+      expect(ppu.buffer[240 + 2]).to eq(0x1234)
+    end
+
+    it 'copies each line of the mode 4 bitmap from the frame DISPCNT bit 4 picks' do
+      bus.write16(0x0400_0000, 0x0014) # DISPCNT: mode 4, frame 1 at 0x0600A000
+      bus.write16(0x0600_A000 + 240 + 2, 0x0003) # pixel (2, 1): color 3
+      bus.write16(0x0500_0006, 0x1234) # color 3
+
+      ppu.step(1232 * 160)
+
+      expect(ppu.buffer[240 + 2]).to eq(0x1234)
+    end
+
+    it 'draws nothing in the 68 lines of VBlank' do
+      bus.write16(0x0400_0000, 0x1F00) # DISPCNT: mode 0, BG0-3 and OBJ on
+
+      ppu.step(1232 * 228)
+
+      expect(ppu.buffer.size).to eq(240 * 160)
+    end
+
+    it 'returns true from step once a frame, as VBlank starts' do
+      expect([ppu.step(1232 * 160 - 1), ppu.step(1), ppu.step(1232 * 68)]).to eq([false, true, false])
+    end
+  end
+
+  describe 'DISPSTAT' do
+    def dispstat
+      bus.read16(0x0400_0004)
+    end
+
+    it 'sets the HBlank flag from cycle 1007 to the end of every line, VBlank lines too' do
+      ppu.step(1006)
+      expect(dispstat[1]).to eq(0)
+      ppu.step(1)
+      expect(dispstat[1]).to eq(1)
+      ppu.step(224)
+      expect(dispstat[1]).to eq(1) # cycle 1231
+      ppu.step(1)
+      expect(dispstat[1]).to eq(0) # line 1
+
+      ppu.step(1232 * 199 + 1007)
+      expect(dispstat[1]).to eq(1) # line 200, cycle 1007
+    end
+
+    it 'sets the VBlank flag from line 160 to line 226' do
+      ppu.step(1232 * 160 - 1)
+      expect(dispstat[0]).to eq(0)
+      ppu.step(1)
+      expect(dispstat[0]).to eq(1) # line 160
+      ppu.step(1232 * 67 - 1)
+      expect(dispstat[0]).to eq(1) # the last cycle of line 226
+      ppu.step(1)
+      expect(dispstat[0]).to eq(0) # line 227
+    end
+
+    it 'sets the VCOUNT match flag while VCOUNT equals bits 8-15' do
+      bus.write16(0x0400_0004, 5 << 8) # LYC 5
+      ppu.step(1232 * 5 - 1)
+      expect(dispstat[2]).to eq(0) # line 4
+      ppu.step(1)
+      expect(dispstat[2]).to eq(1) # line 5
+      ppu.step(1232)
+      expect(dispstat[2]).to eq(0) # line 6
+    end
+
+    it 'counts VCOUNT from 227 back to 0 and matches line 0' do
+      ppu.step(1232 * 227)
+      expect(bus.read16(0x0400_0006)).to eq(227)
+
+      ppu.step(1232) # LYC 0
+      expect([bus.read16(0x0400_0006), dispstat[2]]).to eq([0, 1])
+    end
+  end
+
   describe 'VBlank interrupt' do
     it 'is requested only when DISPSTAT bit 3 is set' do
       ppu.step(1232 * 228)
@@ -576,6 +685,43 @@ RSpec.describe RubyboyAdvance::Ppu do
       bus.write16(0x0400_0004, 0x0008) # DISPSTAT: VBlank IRQ on
       ppu.step(1232 * 228)
       expect(bus.read16(0x0400_0202)).to eq(1)
+    end
+  end
+
+  describe 'HBlank interrupt' do
+    it 'is requested at cycle 1007 only when DISPSTAT bit 4 is set' do
+      ppu.step(1232 * 228)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+
+      bus.write16(0x0400_0004, 0x0010) # DISPSTAT: HBlank IRQ on
+      ppu.step(1006)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+      ppu.step(1)
+      expect(bus.read16(0x0400_0202)).to eq(2)
+    end
+
+    it 'is requested in VBlank too' do
+      bus.write16(0x0400_0004, 0x0010) # DISPSTAT: HBlank IRQ on
+      ppu.step(1232 * 200)
+      bus.write16(0x0400_0202, 0x0002) # clears IF bit 1, left by lines 0-199
+
+      ppu.step(1007)
+
+      expect(bus.read16(0x0400_0202)).to eq(2) # line 200
+    end
+  end
+
+  describe 'VCOUNT interrupt' do
+    it 'is requested as VCOUNT reaches bits 8-15 only when DISPSTAT bit 5 is set' do
+      bus.write16(0x0400_0004, 5 << 8) # LYC 5
+      ppu.step(1232 * 228)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+
+      bus.write16(0x0400_0004, (5 << 8) | 0x0020) # DISPSTAT: VCOUNT IRQ on, LYC 5
+      ppu.step(1232 * 5 - 1)
+      expect(bus.read16(0x0400_0202)).to eq(0)
+      ppu.step(1)
+      expect(bus.read16(0x0400_0202)).to eq(4)
     end
   end
 end

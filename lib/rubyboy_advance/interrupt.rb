@@ -4,6 +4,8 @@ module RubyboyAdvance
   class Interrupt
     INTERRUPTS = {
       vblank: 0,
+      hblank: 1,
+      vcount: 2,
       timer0: 3,
       timer1: 4,
       timer2: 5,
