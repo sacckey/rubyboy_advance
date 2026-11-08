@@ -19,6 +19,9 @@ module RubyboyAdvance
       @buffer = Array.new(240 * 160, 0x7FFF)
       @interrupt = interrupt
       update_vcount_match # line 0 already matches LYC 0
+      @top_layers = Array.new(240, 0)
+      @second_layers = Array.new(240, 0)
+      @second_colors = Array.new(240, 0)
     end
 
     def step(cycles)
@@ -32,6 +35,7 @@ module RubyboyAdvance
             case dispcnt & 0x7
             when 0
               @buffer.fill(@palram[0] | (@palram[1] << 8), vcount * 240, 240)
+              @top_layers.fill(5)
               bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
               bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
               obj_colors, obj_priorities = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}]
@@ -40,6 +44,29 @@ module RubyboyAdvance
                   draw_bg(n, vcount)
                 end
                 draw_objs(obj_colors, obj_priorities, priority)
+              end
+              bldcnt_cache = bldcnt
+              if (effect = ((bldcnt_cache >> 6) & 0b11)) >= 2
+                evy = [(bldy & 0x1F), 16].min
+                240.times do |x|
+                  next unless bldcnt_cache[@top_layers[x]] == 1
+
+                  c = @buffer[vcount * 240 + x]
+                  r = c & 0x1F
+                  g = (c >> 5) & 0x1F
+                  b = (c >> 10) & 0x1F
+                  if effect == 2
+                    r += ((31 - r) * evy >> 4)
+                    g += ((31 - g) * evy >> 4)
+                    b += ((31 - b) * evy >> 4)
+                  else
+                    r -= (r * evy >> 4)
+                    g -= (g * evy >> 4)
+                    b -= (b * evy >> 4)
+                  end
+
+                  @buffer[vcount * 240 + x] = r | (g << 5) | (b << 10)
+                end
               end
             when 3
               start = vcount * 240
@@ -163,13 +190,24 @@ module RubyboyAdvance
         next if color == 0
 
         i = ((palette_index << 4) + color) << 1
+
+        @second_layers[x] = @top_layers[x]
+        @top_layers[x] = n
+        @second_colors[x] = @buffer[y * 240 + x]
         @buffer[y * 240 + x] = @palram[i] | (@palram[i + 1] << 8)
       end
     end
 
     def draw_objs(obj_colors, obj_priorities, priority)
       obj_colors.each do |index, color|
-        @buffer[index] = color if obj_priorities[index] == priority
+        next unless obj_priorities[index] == priority
+
+        x = index % 240
+        @second_layers[x] = @top_layers[x]
+        @top_layers[x] = 4
+        @second_colors[x] = @buffer[index]
+
+        @buffer[index] = color
       end
     end
 
@@ -266,6 +304,18 @@ module RubyboyAdvance
 
     def dispstat
       read_io16(4)
+    end
+
+    def bldcnt
+      read_io16(0x50)
+    end
+
+    def bldalpha
+      read_io16(0x52)
+    end
+
+    def bldy
+      read_io16(0x54)
     end
 
     def vcount

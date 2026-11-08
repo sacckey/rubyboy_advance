@@ -569,6 +569,78 @@ RSpec.describe RubyboyAdvance::Ppu do
         end
       end
     end
+
+    describe 'brightness' do
+      def rgb(red, green, blue) = red | (green << 5) | (blue << 10)
+
+      # Line 0 shows BG2 at x = 0, the backdrop at x = 8 and an OBJ over BG2 at x = 16
+      def pixels = [ppu.buffer[0], ppu.buffer[8], ppu.buffer[16]]
+
+      def show(bldcnt, bldy, obj_priority: 0)
+        bus.write16(0x0400_0050, bldcnt)
+        bus.write16(0x0400_0054, bldy)
+        bus.write16(0x0700_0000, 0) # OBJ 0: y 0, 8x8
+        bus.write16(0x0700_0002, 16) # x 16
+        bus.write16(0x0700_0004, 1 | (obj_priority << 10)) # tile 1
+        step(1232 * 160)
+      end
+
+      before do
+        bus.write16(0x0400_0000, 0x1400) # DISPCNT: mode 0, BG2 and OBJ on
+        bus.write16(0x0400_000C, 0x0004) # BG2CNT: priority 0, tiles at 0x06004000, map at 0x06000000
+        bus.write16(0x0600_0002, 0x0001) # map entry (1, 0): tile 1, which is empty
+        bus.write32(0x0600_4000, 0x1111_1111) # BG tile 0 row 0: all color 1
+        8.times { |row| bus.write32(0x0601_0020 + row * 4, 0x1111_1111) } # OBJ tile 1: all color 1
+        (1...128).each { |index| bus.write16(0x0700_0000 + index * 8, 0x0200) } # the other OBJs hidden
+        bus.write16(0x0500_0000, rgb(31, 0, 16)) # backdrop
+        bus.write16(0x0500_0002, rgb(8, 16, 24)) # BG bank 0 color 1
+        bus.write16(0x0500_0202, rgb(0, 24, 8)) # OBJ bank 0 color 1
+      end
+
+      it 'darkens the 1st targets in BLDCNT bits 0-5 with effect 3 by BLDY / 16' do
+        show(0x00C4, 8) # BG2, effect 3
+
+        expect(pixels).to eq([rgb(4, 8, 12), rgb(31, 0, 16), rgb(0, 24, 8)])
+      end
+
+      it 'brightens them with effect 2 by BLDY / 16 of the way to white' do
+        show(0x0084, 8) # BG2, effect 2
+
+        expect(pixels).to eq([rgb(19, 23, 27), rgb(31, 0, 16), rgb(0, 24, 8)])
+      end
+
+      it 'takes the OBJs as bit 4' do
+        show(0x00D0, 8) # OBJ, effect 3
+
+        expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(0, 12, 4)])
+      end
+
+      it 'takes the backdrop as bit 5' do
+        show(0x00E0, 8) # backdrop, effect 3
+
+        expect(pixels).to eq([rgb(8, 16, 24), rgb(16, 0, 8), rgb(0, 24, 8)])
+      end
+
+      it 'looks only at the layer in front, so an OBJ behind BG2 leaves the pixel alone' do
+        show(0x00D0, 8, obj_priority: 1) # OBJ, effect 3; BG2 has priority 0
+
+        expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(8, 16, 24)])
+      end
+
+      it 'treats BLDY above 16 as 16' do
+        show(0x0084, 31) # BG2, effect 2
+
+        expect(pixels[0]).to eq(rgb(31, 31, 31))
+      end
+
+      [[0x0004, 'effect 0'], [0x0044, 'effect 1 and no 2nd targets in bits 8-13']].each do |bldcnt, setting|
+        it "leaves the colors alone with #{setting}" do
+          show(bldcnt, 8) # BG2 as the 1st target
+
+          expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(0, 24, 8)])
+        end
+      end
+    end
   end
 
   describe 'lines' do
