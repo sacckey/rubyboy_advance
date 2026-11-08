@@ -569,6 +569,150 @@ RSpec.describe RubyboyAdvance::Ppu do
         end
       end
     end
+
+    describe 'color effects' do
+      def rgb(red, green, blue) = red | (green << 5) | (blue << 10)
+
+      # Line 0 shows BG2 at x = 0, the backdrop at x = 8 and an OBJ over BG2 at x = 16
+      def pixels = [ppu.buffer[0], ppu.buffer[8], ppu.buffer[16]]
+
+      def show(bldcnt, bldy = 0, bldalpha: 0, obj_attr0: 0, obj_priority: 0, obj_tile: 1)
+        bus.write16(0x0400_0050, bldcnt)
+        bus.write16(0x0400_0052, bldalpha)
+        bus.write16(0x0400_0054, bldy)
+        bus.write16(0x0700_0000, obj_attr0) # OBJ 0: y 0, 8x8
+        bus.write16(0x0700_0002, 16) # x 16
+        bus.write16(0x0700_0004, obj_tile | (obj_priority << 10))
+        step(1232 * 160)
+      end
+
+      before do
+        bus.write16(0x0400_0000, 0x1400) # DISPCNT: mode 0, BG2 and OBJ on
+        bus.write16(0x0400_000C, 0x0004) # BG2CNT: priority 0, tiles at 0x06004000, map at 0x06000000
+        bus.write16(0x0600_0002, 0x0001) # map entry (1, 0): tile 1, which is empty
+        bus.write32(0x0600_4000, 0x1111_1111) # BG tile 0 row 0: all color 1
+        8.times { |row| bus.write32(0x0601_0020 + row * 4, 0x1111_1111) } # OBJ tile 1: all color 1
+        bus.write32(0x0601_0060, 0x1111_1111) # OBJ tile 3 row 0: all color 1, the other rows empty
+        (1...128).each { |index| bus.write16(0x0700_0000 + index * 8, 0x0200) } # the other OBJs hidden
+        bus.write16(0x0500_0000, rgb(31, 0, 16)) # backdrop
+        bus.write16(0x0500_0002, rgb(8, 16, 24)) # BG bank 0 color 1
+        bus.write16(0x0500_0202, rgb(0, 24, 8)) # OBJ bank 0 color 1
+      end
+
+      it 'darkens the 1st targets in BLDCNT bits 0-5 with effect 3 by BLDY / 16' do
+        show(0x00C4, 8) # BG2, effect 3
+
+        expect(pixels).to eq([rgb(4, 8, 12), rgb(31, 0, 16), rgb(0, 24, 8)])
+      end
+
+      it 'brightens them with effect 2 by BLDY / 16 of the way to white' do
+        show(0x0084, 8) # BG2, effect 2
+
+        expect(pixels).to eq([rgb(19, 23, 27), rgb(31, 0, 16), rgb(0, 24, 8)])
+      end
+
+      it 'takes the OBJs as bit 4' do
+        show(0x00D0, 8) # OBJ, effect 3
+
+        expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(0, 12, 4)])
+      end
+
+      it 'takes the backdrop as bit 5' do
+        show(0x00E0, 8) # backdrop, effect 3
+
+        expect(pixels).to eq([rgb(8, 16, 24), rgb(16, 0, 8), rgb(0, 24, 8)])
+      end
+
+      it 'looks only at the layer in front, so an OBJ behind BG2 leaves the pixel alone' do
+        show(0x00D0, 8, obj_priority: 1) # OBJ, effect 3; BG2 has priority 0
+
+        expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(8, 16, 24)])
+      end
+
+      it 'treats BLDY above 16 as 16' do
+        show(0x0084, 31) # BG2, effect 2
+
+        expect(pixels[0]).to eq(rgb(31, 31, 31))
+      end
+
+      [[0x0004, 'effect 0'], [0x0044, 'effect 1 and no 2nd targets in bits 8-13']].each do |bldcnt, setting|
+        it "leaves the colors alone with #{setting}" do
+          show(bldcnt, 8) # BG2 as the 1st target
+
+          expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(0, 24, 8)])
+        end
+      end
+
+      it 'mixes each 1st target with the 2nd target right under it with effect 1, by EVA / 16 and EVB / 16' do
+        show(0x2454, bldalpha: 0x080C) # 1st BG2 and OBJ, 2nd BG2 and backdrop, effect 1; EVA 12, EVB 8
+
+        expect(pixels).to eq([rgb(21, 12, 26), rgb(31, 0, 16), rgb(4, 26, 18)]) # BG2 over the backdrop, OBJ over BG2
+      end
+
+      it 'does not mix when the layer right under is not a 2nd target, even if one further down is' do
+        show(0x2050, bldalpha: 0x080C) # 1st OBJ, 2nd backdrop, effect 1; BG2 is between them
+
+        expect(pixels[2]).to eq(rgb(0, 24, 8))
+      end
+
+      it 'stops each mixed channel at 31' do
+        show(0x2044, bldalpha: 0x1010) # 1st BG2, 2nd backdrop, effect 1; EVA 16, EVB 16
+
+        expect(pixels[0]).to eq(rgb(31, 16, 31))
+      end
+
+      [[0x001F, 'only BG2', [8, 16, 24]], [0x1F00, 'only the backdrop', [31, 0, 16]]].each do |bldalpha, shown, color|
+        it "treats EVA and EVB above 16 as 16, so BLDALPHA #{format('%04X', bldalpha)} shows #{shown}" do
+          show(0x2044, bldalpha:) # 1st BG2, 2nd backdrop, effect 1
+
+          expect(pixels[0]).to eq(rgb(*color))
+        end
+      end
+
+      it 'brightens rather than mixes with effect 2, even with a 2nd target right under' do
+        show(0x2084, 8, bldalpha: 0x080C) # 1st BG2, 2nd backdrop, effect 2
+
+        expect(pixels[0]).to eq(rgb(19, 23, 27))
+      end
+
+      it 'mixes a backdrop pixel with the backdrop under it, not with what was under that pixel on the line before' do
+        # Line 0 has BG2 over the OBJ at x = 16; on line 1 both are empty there
+        show(0x2060, bldalpha: 0x0C0C, obj_priority: 1, obj_tile: 3) # 1st and 2nd backdrop, effect 1; EVA 12, EVB 12
+
+        expect(ppu.buffer[240 + 16]).to eq(rgb(31, 0, 24))
+      end
+
+      describe 'with a semi-transparent OBJ' do
+        let(:semi) { 0x0400 } # attr0 bits 10-11: 1
+
+        it 'mixes it with the 2nd target under it, even with effect 0 and BLDCNT bit 4 off' do
+          show(0x2404, bldalpha: 0x080C, obj_attr0: semi) # 1st BG2, 2nd BG2 and backdrop, effect 0
+
+          expect(pixels).to eq([rgb(8, 16, 24), rgb(31, 0, 16), rgb(4, 26, 18)]) # BG2 over the backdrop stays
+        end
+
+        it 'treats it as a normal OBJ when the layer under is not a 2nd target' do
+          show(0x00D0, 8, bldalpha: 0x080C, obj_attr0: semi) # 1st OBJ, no 2nd targets, effect 3
+
+          expect(pixels[2]).to eq(rgb(0, 12, 4))
+        end
+
+        it 'does not mix it while it is behind BG2' do
+          show(0x1400, bldalpha: 0x080C, obj_attr0: semi, obj_priority: 1) # 2nd BG2 and OBJ, effect 0
+
+          expect(pixels[2]).to eq(rgb(8, 16, 24))
+        end
+
+        it 'does not mix the pixels a later OBJ in OAM takes from it' do
+          bus.write16(0x0700_0008, 0) # OBJ 1: y 0, 8x8, not semi-transparent
+          bus.write16(0x0700_000A, 16) # x 16
+          bus.write16(0x0700_000C, 1) # tile 1, priority 0, ahead of OBJ 0
+          show(0x0400, bldalpha: 0x080C, obj_attr0: semi, obj_priority: 1) # 2nd BG2, effect 0
+
+          expect(pixels[2]).to eq(rgb(0, 24, 8))
+        end
+      end
+    end
   end
 
   describe 'lines' do
