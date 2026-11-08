@@ -34,11 +34,14 @@ module RubyboyAdvance
             dispcnt = read_io16(0)
             case dispcnt & 0x7
             when 0
-              @buffer.fill(@palram[0] | (@palram[1] << 8), vcount * 240, 240)
+              background = @palram[0] | (@palram[1] << 8)
+              @buffer.fill(background, vcount * 240, 240)
               @top_layers.fill(5)
+              @second_layers.fill(5)
+              @second_colors.fill(background)
               bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
               bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
-              obj_colors, obj_priorities = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}]
+              obj_colors, obj_priorities, obj_alphas = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}, {}]
               3.downto(0) do |priority|
                 (bgs_by_priority[priority] || []).sort.reverse.each do |n|
                   draw_bg(n, vcount)
@@ -46,26 +49,39 @@ module RubyboyAdvance
                 draw_objs(obj_colors, obj_priorities, priority)
               end
               bldcnt_cache = bldcnt
-              if (effect = ((bldcnt_cache >> 6) & 0b11)) >= 2
+              bldalpha_cache = bldalpha
+              offset = vcount * 240
+              effect = ((bldcnt_cache >> 6) & 0b11)
+              if effect != 0 || obj_alphas.value?(true)
                 evy = [(bldy & 0x1F), 16].min
+                eva = [bldalpha_cache & 0x1F, 16].min
+                evb = [bldalpha_cache >> 8 & 0x1F, 16].min
                 240.times do |x|
-                  next unless bldcnt_cache[@top_layers[x]] == 1
-
-                  c = @buffer[vcount * 240 + x]
-                  r = c & 0x1F
-                  g = (c >> 5) & 0x1F
-                  b = (c >> 10) & 0x1F
-                  if effect == 2
-                    r += ((31 - r) * evy >> 4)
-                    g += ((31 - g) * evy >> 4)
-                    b += ((31 - b) * evy >> 4)
+                  if (@top_layers[x] == 4 && obj_alphas[offset + x] && bldcnt_cache[8 + @second_layers[x]] == 1) || (effect == 1 && bldcnt_cache[@top_layers[x]] == 1 && bldcnt_cache[8 + @second_layers[x]] == 1)
+                    c = @buffer[offset + x]
+                    s = @second_colors[x]
+                    r = [((c & 0x1F) * eva + (s & 0x1F) * evb) >> 4, 31].min
+                    g = [((c >> 5 & 0x1F) * eva + (s >> 5 & 0x1F) * evb) >> 4, 31].min
+                    b = [((c >> 10 & 0x1F) * eva + (s >> 10 & 0x1F) * evb) >> 4, 31].min
                   else
-                    r -= (r * evy >> 4)
-                    g -= (g * evy >> 4)
-                    b -= (b * evy >> 4)
-                  end
+                    next unless bldcnt_cache[@top_layers[x]] == 1
 
-                  @buffer[vcount * 240 + x] = r | (g << 5) | (b << 10)
+                    c = @buffer[offset + x]
+                    r = c & 0x1F
+                    g = (c >> 5) & 0x1F
+                    b = (c >> 10) & 0x1F
+                    case effect
+                    when 2
+                      r += ((31 - r) * evy >> 4)
+                      g += ((31 - g) * evy >> 4)
+                      b += ((31 - b) * evy >> 4)
+                    when 3
+                      r -= (r * evy >> 4)
+                      g -= (g * evy >> 4)
+                      b -= (b * evy >> 4)
+                    end
+                  end
+                  @buffer[offset + x] = r | (g << 5) | (b << 10)
                 end
               end
             when 3
@@ -218,6 +234,7 @@ module RubyboyAdvance
     def render_objs(objs, y)
       obj_colors = {}
       obj_priorities = {}
+      obj_alphas = {}
       is_1d = read_io16(0)[6] == 1
 
       objs.each do |obj|
@@ -260,10 +277,11 @@ module RubyboyAdvance
 
           i = 0x200 + (((bank << 4) + color) << 1)
           obj_colors[index] = @palram[i] | (@palram[i + 1] << 8)
+          obj_alphas[index] = obj[:mode] == 1
         end
       end
 
-      [obj_colors, obj_priorities]
+      [obj_colors, obj_priorities, obj_alphas]
     end
 
     def read_objs(y)
@@ -289,6 +307,7 @@ module RubyboyAdvance
           y: obj_y,
           rotate:,
           invisible:,
+          mode: (@oam[base + 1] >> 2) & 0b11,
           color256: @oam[base + 1][5],
           shape:,
           x: @oam[base + 2] | (@oam[base + 3][0] << 8),
