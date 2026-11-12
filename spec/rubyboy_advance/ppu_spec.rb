@@ -713,6 +713,142 @@ RSpec.describe RubyboyAdvance::Ppu do
         end
       end
     end
+
+    describe 'windows' do
+      def rgb(red, green, blue) = red | (green << 5) | (blue << 10)
+      def pixel(x, y) = ppu.buffer[y * 240 + x]
+
+      def set_window(n, x1, x2, y1, y2)
+        bus.write16(0x0400_0040 + n * 2, (x1 << 8) | x2) # WINnH
+        bus.write16(0x0400_0044 + n * 2, (y1 << 8) | y2) # WINnV
+      end
+
+      def show_obj(index, x, attr0: 0)
+        bus.write16(0x0700_0000 + index * 8, attr0) # y 0, 8x8
+        bus.write16(0x0700_0002 + index * 8, x)
+        bus.write16(0x0700_0004 + index * 8, 1) # tile 1, priority 0
+      end
+
+      let(:backdrop) { rgb(2, 4, 6) }
+      let(:bg0) { rgb(8, 16, 24) }
+      let(:bg1) { rgb(31, 0, 16) }
+      let(:obj) { rgb(0, 24, 8) }
+
+      before do
+        bus.write16(0x0400_0008, 0x0004) # BG0CNT: priority 0, tiles at 0x06004000, map at 0x06000000 (every entry tile 0)
+        bus.write16(0x0400_000A, 0x0009) # BG1CNT: priority 1, tiles at 0x06008000, the same map
+        8.times do |row|
+          bus.write32(0x0600_4000 + row * 4, 0x1111_1111) # BG0 tile 0: all color 1
+          bus.write32(0x0600_8000 + row * 4, 0x2222_2222) # BG1 tile 0: all color 2
+          bus.write32(0x0601_0020 + row * 4, 0x1111_1111) # OBJ tile 1: all color 1
+        end
+        128.times { |index| bus.write16(0x0700_0000 + index * 8, 0x0200) } # every OBJ hidden
+        bus.write16(0x0500_0000, backdrop)
+        bus.write16(0x0500_0002, bg0) # BG bank 0 color 1
+        bus.write16(0x0500_0004, bg1) # BG bank 0 color 2
+        bus.write16(0x0500_0202, obj) # OBJ bank 0 color 1
+      end
+
+      it 'shows the layers in WININ bits 0-5 inside WIN0 and those in WINOUT bits 0-5 outside, X2 and Y2 not included' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 40, 80, 20, 60)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        step(1232 * 160)
+
+        expect([pixel(39, 30), pixel(40, 30), pixel(79, 30), pixel(80, 30)]).to eq([bg0, bg1, bg1, bg0])
+        expect([pixel(40, 19), pixel(40, 20), pixel(40, 59), pixel(40, 60)]).to eq([bg0, bg1, bg1, bg0])
+      end
+
+      it 'uses WININ bits 8-13 inside WIN1, and WIN0 where both are, and shows the backdrop where nothing is allowed' do
+        bus.write16(0x0400_0000, 0x6300) # DISPCNT: BG0, BG1, WIN0, WIN1
+        set_window(0, 40, 80, 0, 160)
+        set_window(1, 0, 60, 0, 160)
+        bus.write16(0x0400_0048, 0x0302) # WININ: BG1 in WIN0, BG0 and BG1 in WIN1
+        bus.write16(0x0400_004A, 0x0000) # WINOUT: nothing outside
+
+        step(1232 * 160)
+
+        expect([pixel(0, 0), pixel(39, 0), pixel(40, 0), pixel(79, 0), pixel(80, 0)]).to eq([bg0, bg0, bg1, bg1, backdrop])
+      end
+
+      it 'wraps around the screen edges when X1 > X2 or Y1 > Y2' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 200, 40, 100, 40) # x 200-239 and 0-39, lines 100-159 and 0-39
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        step(1232 * 160)
+
+        expect([pixel(0, 30), pixel(39, 30), pixel(40, 30), pixel(199, 30), pixel(200, 30)]).to eq([bg1, bg1, bg0, bg0, bg1])
+        expect([pixel(0, 39), pixel(0, 40), pixel(0, 99), pixel(0, 100)]).to eq([bg1, bg0, bg0, bg1])
+      end
+
+      it 'leaves WINOUT out while no window is on' do
+        bus.write16(0x0400_0000, 0x0300) # DISPCNT: BG0, BG1, no window
+        bus.write16(0x0400_004A, 0x0000) # WINOUT: nothing outside
+
+        step(1232 * 160)
+
+        expect(pixel(0, 0)).to eq(bg0)
+      end
+
+      [[0x2300, 1, 'WIN1'], [0x4300, 0, 'WIN0']].each do |dispcnt, off, window|
+        it "leaves #{window} out while its DISPCNT bit is off" do
+          bus.write16(0x0400_0000, dispcnt) # BG0, BG1 and the other window, whose registers are 0 and so empty
+          set_window(off, 0, 240, 0, 160) # the whole screen
+          bus.write16(0x0400_0048, 0x0202) # WININ: BG1 in WIN0 and WIN1
+          bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+          step(1232 * 160)
+
+          expect(pixel(0, 0)).to eq(bg0)
+        end
+      end
+
+      it 'hides the OBJs where the window does not allow them' do
+        bus.write16(0x0400_0000, 0x3200) # DISPCNT: BG1, OBJ, WIN0
+        set_window(0, 40, 80, 0, 160)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0012) # WINOUT: BG1 and OBJ outside
+        show_obj(0, 40)
+        show_obj(1, 100)
+
+        step(1232 * 160)
+
+        expect([pixel(40, 0), pixel(100, 0)]).to eq([bg1, obj])
+      end
+
+      [[0x00C1, 'darkening', [0, 0, 0]], [0x0241, 'mixing', [21, 12, 26]]].each do |bldcnt, effect, inside|
+        it "allows #{effect} only where the window has bit 5 set" do
+          bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+          set_window(0, 40, 80, 0, 160)
+          bus.write16(0x0400_0048, 0x0023) # WININ: BG0, BG1 and effects in WIN0
+          bus.write16(0x0400_004A, 0x0003) # WINOUT: BG0 and BG1 outside, no effects
+          bus.write16(0x0400_0050, bldcnt) # 1st BG0, effect 3 / 1st BG0, 2nd BG1, effect 1
+          bus.write16(0x0400_0052, 0x080C) # EVA 12, EVB 8
+          bus.write16(0x0400_0054, 16) # EVY 16
+
+          step(1232 * 160)
+
+          expect([pixel(40, 0), pixel(80, 0)]).to eq([rgb(*inside), bg0])
+        end
+      end
+
+      it 'still mixes a semi-transparent OBJ where the window has bit 5 clear' do
+        bus.write16(0x0400_0000, 0x3200) # DISPCNT: BG1, OBJ, WIN0
+        set_window(0, 200, 201, 0, 160) # away from the OBJ
+        bus.write16(0x0400_004A, 0x0012) # WINOUT: BG1 and OBJ outside, no effects
+        bus.write16(0x0400_0050, 0x02C0) # 2nd BG1, effect 3
+        bus.write16(0x0400_0052, 0x080C) # EVA 12, EVB 8
+        show_obj(0, 100, attr0: 0x0400) # attr0 bits 10-11: 1, semi-transparent
+
+        step(1232 * 160)
+
+        expect(pixel(100, 0)).to eq(rgb(15, 18, 14))
+      end
+    end
   end
 
   describe 'lines' do

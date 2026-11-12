@@ -22,6 +22,7 @@ module RubyboyAdvance
       @top_layers = Array.new(240, 0)
       @second_layers = Array.new(240, 0)
       @second_colors = Array.new(240, 0)
+      @window_masks = Array.new(240, 0x3F)
     end
 
     def step(cycles)
@@ -39,6 +40,7 @@ module RubyboyAdvance
               @top_layers.fill(5)
               @second_layers.fill(5)
               @second_colors.fill(background)
+              set_window_masks
               bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
               bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
               obj_colors, obj_priorities, obj_alphas = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}, {}]
@@ -57,14 +59,15 @@ module RubyboyAdvance
                 eva = [bldalpha_cache & 0x1F, 16].min
                 evb = [bldalpha_cache >> 8 & 0x1F, 16].min
                 240.times do |x|
-                  if (@top_layers[x] == 4 && obj_alphas[offset + x] && bldcnt_cache[8 + @second_layers[x]] == 1) || (effect == 1 && bldcnt_cache[@top_layers[x]] == 1 && bldcnt_cache[8 + @second_layers[x]] == 1)
+                  sfx = @window_masks[x][5] == 1
+                  if (@top_layers[x] == 4 && obj_alphas[offset + x] && bldcnt_cache[8 + @second_layers[x]] == 1) || (sfx && effect == 1 && bldcnt_cache[@top_layers[x]] == 1 && bldcnt_cache[8 + @second_layers[x]] == 1)
                     c = @buffer[offset + x]
                     s = @second_colors[x]
                     r = [((c & 0x1F) * eva + (s & 0x1F) * evb) >> 4, 31].min
                     g = [((c >> 5 & 0x1F) * eva + (s >> 5 & 0x1F) * evb) >> 4, 31].min
                     b = [((c >> 10 & 0x1F) * eva + (s >> 10 & 0x1F) * evb) >> 4, 31].min
                   else
-                    next unless bldcnt_cache[@top_layers[x]] == 1
+                    next unless sfx && bldcnt_cache[@top_layers[x]] == 1
 
                     c = @buffer[offset + x]
                     r = c & 0x1F
@@ -176,6 +179,38 @@ module RubyboyAdvance
 
     private
 
+    def set_window_masks
+      dispcnt = read_io16(0)
+      if dispcnt & 0xE000 == 0
+        @window_masks.fill(0x3F)
+        return
+      end
+
+      240.times do |x|
+        @window_masks[x] = if dispcnt[13] == 1 && in_window?(x, vcount, 0)
+                             @io[0x48] & 0b111111
+                           elsif dispcnt[14] == 1 && in_window?(x, vcount, 1)
+                             @io[0x49] & 0b111111
+                           else
+                             @io[0x4A] & 0b111111
+                           end
+      end
+    end
+
+    def in_window?(x, y, window)
+      win_h = read_io16(0x40 + window * 2)
+      x1 = (win_h >> 8)
+      x2 = (win_h & 0xFF)
+
+      return false unless (x >= x1 && x < x2) || (x2 < x1 && (x >= x1 || x < x2))
+
+      win_y = read_io16(0x44 + window * 2)
+      y1 = (win_y >> 8)
+      y2 = (win_y & 0xFF)
+
+      (y >= y1 && y < y2) || (y2 < y1 && (y >= y1 || y < y2))
+    end
+
     def draw_bg(n, y)
       bgncnt = read_io16(8 + n * 2)
       size = bgncnt >> 14 # 0: 256×256, 1: 512×256, 2: 256×512, 3: 512×512
@@ -185,6 +220,8 @@ module RubyboyAdvance
       vofs = read_io16(0x12 + n * 4)
       map_y = (y + vofs) & (size[1] == 0 ? 0xFF : 0x1FF)
       240.times do |x|
+        next if @window_masks[x][n] == 0
+
         map_x = (x + hofs) & (size[0] == 0 ? 0xFF : 0x1FF)
         block = (map_x >> 8) + (map_y >> 8) * (size[0] == 0 ? 1 : 2)
         tile_map_index = map_base + (block << 11) + (((((map_y & 0xFF) >> 3) << 5) + ((map_x & 0xFF) >> 3)) << 1)
@@ -247,6 +284,7 @@ module RubyboyAdvance
         width.times do |x|
           screen_x = (obj[:x] + x) & 0x1FF
           next if screen_x >= 240
+          next if @window_masks[screen_x][4] == 0
 
           tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
 
