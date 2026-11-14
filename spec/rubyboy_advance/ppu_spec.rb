@@ -718,6 +718,9 @@ RSpec.describe RubyboyAdvance::Ppu do
       def rgb(red, green, blue) = red | (green << 5) | (blue << 10)
       def pixel(x, y) = ppu.buffer[y * 240 + x]
 
+      # A window turns on only as a line starts at its Y1, so the first frame misses it above Y1
+      def draw_second_frame = step(1232 * 228 + 1232 * 160)
+
       def set_window(n, x1, x2, y1, y2)
         bus.write16(0x0400_0040 + n * 2, (x1 << 8) | x2) # WINnH
         bus.write16(0x0400_0044 + n * 2, (y1 << 8) | y2) # WINnV
@@ -756,7 +759,7 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
         bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
 
-        step(1232 * 160)
+        draw_second_frame
 
         expect([pixel(39, 30), pixel(40, 30), pixel(79, 30), pixel(80, 30)]).to eq([bg0, bg1, bg1, bg0])
         expect([pixel(40, 19), pixel(40, 20), pixel(40, 59), pixel(40, 60)]).to eq([bg0, bg1, bg1, bg0])
@@ -769,7 +772,7 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_0048, 0x0302) # WININ: BG1 in WIN0, BG0 and BG1 in WIN1
         bus.write16(0x0400_004A, 0x0000) # WINOUT: nothing outside
 
-        step(1232 * 160)
+        draw_second_frame
 
         expect([pixel(0, 0), pixel(39, 0), pixel(40, 0), pixel(79, 0), pixel(80, 0)]).to eq([bg0, bg0, bg1, bg1, backdrop])
       end
@@ -780,17 +783,52 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
         bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
 
-        step(1232 * 160)
+        draw_second_frame
 
         expect([pixel(0, 30), pixel(39, 30), pixel(40, 30), pixel(199, 30), pixel(200, 30)]).to eq([bg1, bg1, bg0, bg0, bg1])
         expect([pixel(0, 39), pixel(0, 40), pixel(0, 99), pixel(0, 100)]).to eq([bg1, bg0, bg0, bg1])
+      end
+
+      it 'keeps a window on from line Y1 until line Y2, even when Y1 moves in between' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 0, 240, 20, 60)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+        step(1232 * 30 + 1007) # through the HBlank of line 30
+        set_window(0, 0, 240, 40, 60)
+
+        step(1232 * 130)
+
+        expect([pixel(0, 19), pixel(0, 20), pixel(0, 31), pixel(0, 39), pixel(0, 59), pixel(0, 60)]).to eq([bg0, bg1, bg1, bg1, bg1, bg0])
+      end
+
+      it 'turns a window on at a line Y1 in VBlank, for the top of the next frame' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 0, 240, 170, 20)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        draw_second_frame
+
+        expect([pixel(0, 0), pixel(0, 19), pixel(0, 20), pixel(0, 159)]).to eq([bg1, bg1, bg0, bg0])
+      end
+
+      it 'leaves a window off when Y1 equals Y2' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 0, 240, 50, 50)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        draw_second_frame
+
+        expect([pixel(0, 0), pixel(0, 50), pixel(0, 100)]).to eq([bg0, bg0, bg0])
       end
 
       it 'leaves WINOUT out while no window is on' do
         bus.write16(0x0400_0000, 0x0300) # DISPCNT: BG0, BG1, no window
         bus.write16(0x0400_004A, 0x0000) # WINOUT: nothing outside
 
-        step(1232 * 160)
+        draw_second_frame
 
         expect(pixel(0, 0)).to eq(bg0)
       end
@@ -802,7 +840,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write16(0x0400_0048, 0x0202) # WININ: BG1 in WIN0 and WIN1
           bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect(pixel(0, 0)).to eq(bg0)
         end
@@ -816,7 +854,7 @@ RSpec.describe RubyboyAdvance::Ppu do
         show_obj(0, 40)
         show_obj(1, 100)
 
-        step(1232 * 160)
+        draw_second_frame
 
         expect([pixel(40, 0), pixel(100, 0)]).to eq([bg1, obj])
       end
@@ -831,7 +869,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write16(0x0400_0052, 0x080C) # EVA 12, EVB 8
           bus.write16(0x0400_0054, 16) # EVY 16
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect([pixel(40, 0), pixel(80, 0)]).to eq([rgb(*inside), bg0])
         end
@@ -845,7 +883,7 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_0052, 0x080C) # EVA 12, EVB 8
         show_obj(0, 100, attr0: 0x0400) # attr0 bits 10-11: 1, semi-transparent
 
-        step(1232 * 160)
+        draw_second_frame
 
         expect(pixel(100, 0)).to eq(rgb(15, 18, 14))
       end
@@ -858,7 +896,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
           show_obj(0, 0, attr0: window_obj | 20, tile: 2) # lines 20-27; pixels at x 0-3, clear at x 4-7
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect([pixel(0, 20), pixel(3, 20), pixel(4, 20), pixel(7, 20), pixel(8, 20)]).to eq([bg0, bg0, bg1, bg1, bg1])
           expect([pixel(0, 19), pixel(0, 28)]).to eq([bg1, bg1])
@@ -868,7 +906,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write16(0x0400_0000, 0x1300) # DISPCNT: BG0, BG1, OBJ
           show_obj(0, 0, attr0: window_obj)
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect(pixel(0, 0)).to eq(bg0)
         end
@@ -878,7 +916,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
           show_obj(0, 0, attr0: window_obj)
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect([pixel(0, 0), pixel(8, 0)]).to eq([bg0, bg0])
         end
@@ -888,7 +926,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
           show_obj(0, 0, attr0: window_obj)
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect(pixel(0, 0)).to eq(bg1)
         end
@@ -901,7 +939,7 @@ RSpec.describe RubyboyAdvance::Ppu do
             bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
             show_obj(0, 0, attr0: window_obj, tile: 2) # pixels at x 0-3
 
-            step(1232 * 160)
+            draw_second_frame
 
             expect([pixel(0, 0), pixel(3, 0), pixel(4, 0)]).to eq([bg0, backdrop, bg1])
           end
@@ -913,9 +951,20 @@ RSpec.describe RubyboyAdvance::Ppu do
           show_obj(0, 0) # a normal OBJ at priority 0
           show_obj(1, 0, attr0: window_obj, tile: 2, priority: 3) # pixels at x 0-3
 
-          step(1232 * 160)
+          draw_second_frame
 
           expect([pixel(0, 0), pixel(4, 0), pixel(8, 0)]).to eq([bg0, obj, bg1])
+        end
+
+        it 'lets the clear pixels of an OBJ in mode 2 lift the priority of the OBJ under them, as any OBJ does' do
+          bus.write16(0x0400_0000, 0x9300) # DISPCNT: BG0, BG1, OBJ, OBJ window
+          bus.write16(0x0400_004A, 0x1313) # WINOUT: BG0, BG1 and OBJ both outside and in the OBJ window
+          show_obj(0, 0, priority: 2) # a normal OBJ behind BG0, which has priority 0
+          show_obj(1, 0, attr0: window_obj, tile: 2, priority: 0) # pixels at x 0-3, clear at x 4-7
+
+          draw_second_frame
+
+          expect([pixel(0, 0), pixel(4, 0)]).to eq([bg0, obj])
         end
       end
     end

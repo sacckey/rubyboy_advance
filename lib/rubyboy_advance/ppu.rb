@@ -23,6 +23,7 @@ module RubyboyAdvance
       @second_layers = Array.new(240, 0)
       @second_colors = Array.new(240, 0)
       @window_masks = Array.new(240, 0x3F)
+      @window_v_flags = [false, false] # whether WIN0 and WIN1 cover the current line
     end
 
     def step(cycles)
@@ -122,6 +123,7 @@ module RubyboyAdvance
 
         self.hblank = false
         update_vcount_match
+        update_window_v_flags
         yield :vblank if vcount == 160 # once DISPSTAT is up to date for line 160
 
         @cycles -= 1232
@@ -187,9 +189,9 @@ module RubyboyAdvance
       end
 
       240.times do |x|
-        @window_masks[x] = if dispcnt[13] == 1 && in_window?(x, vcount, 0)
+        @window_masks[x] = if dispcnt[13] == 1 && in_window?(x, 0)
                              @io[0x48] & 0b111111
-                           elsif dispcnt[14] == 1 && in_window?(x, vcount, 1)
+                           elsif dispcnt[14] == 1 && in_window?(x, 1)
                              @io[0x49] & 0b111111
                            elsif dispcnt[15] == 1 && obj_window[vcount * 240 + x]
                              @io[0x4B] & 0b111111
@@ -199,18 +201,23 @@ module RubyboyAdvance
       end
     end
 
-    def in_window?(x, y, window)
+    def in_window?(x, window)
       win_h = read_io16(0x40 + window * 2)
       x1 = (win_h >> 8)
       x2 = (win_h & 0xFF)
 
       return false unless (x >= x1 && x < x2) || (x2 < x1 && (x >= x1 || x < x2))
 
-      win_y = read_io16(0x44 + window * 2)
-      y1 = (win_y >> 8)
-      y2 = (win_y & 0xFF)
+      @window_v_flags[window]
+    end
 
-      (y >= y1 && y < y2) || (y2 < y1 && (y >= y1 || y < y2))
+    # A window turns on as a line starts at Y1 and off at Y2, VBlank lines too, and stays so in between,
+    # so a Y1 or Y2 written later waits for that line (NanoBoyAdvance window.cc InitWindow)
+    def update_window_v_flags
+      2.times do |n|
+        @window_v_flags[n] = true if vcount == @io[0x45 + n * 2] # Y1
+        @window_v_flags[n] = false if vcount == @io[0x44 + n * 2] # Y2
+      end
     end
 
     def draw_bg(n, y)
@@ -292,7 +299,8 @@ module RubyboyAdvance
           tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
 
           index = y * 240 + screen_x
-          next unless obj[:mode] == 2 || obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
+          in_front = obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
+          next unless in_front || obj[:mode] == 2
 
           if obj[:color256] == 0
             tile_number = if is_1d
@@ -313,10 +321,14 @@ module RubyboyAdvance
             # Tile 1023 runs past the end of VRAM, so the address wraps within the OBJ tiles (mGBA software-obj.c)
             color = @vram[0x10000 + (((tile_number << 5) + ((tex_y & 7) << 3) + (tex_x & 7)) & 0x7FFF)]
           end
-          if obj[:mode] == 2
-            obj_window[index] = true if color != 0
+          # An OBJ in mode 2 puts its pixels in the OBJ window, and its clear pixels still lift the
+          # priority like any OBJ's (NanoBoyAdvance sprite.cc)
+          if obj[:mode] == 2 && color != 0
+            obj_window[index] = true
             next
           end
+          next unless in_front
+
           obj_priorities[index] = obj[:priority]
           next if color == 0
 
