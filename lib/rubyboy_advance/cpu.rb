@@ -39,7 +39,7 @@ module RubyboyAdvance
 
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
-      self.pc &= flag_t ? ~1 : ~3
+      @regs[15] &= flag_t ? ~1 : ~3
 
       if @interrupt.irq? && @cpsr[7] == 0
         @spsrs[:irq] = @cpsr
@@ -53,8 +53,8 @@ module RubyboyAdvance
       address = pc
 
       if flag_t
-        opcode = @bus.read16(address)
-        self.pc += 2
+        opcode = fetch(address, 2)
+        @regs[15] += 2
 
         case opcode >> 12
         when 0x0, 0x1
@@ -139,11 +139,11 @@ module RubyboyAdvance
 
             case opcode[8..9]
             when 0b00
-              @regs[rd] = (reg(rd) + reg(rs)) & 0xFFFF_FFFF
+              set_reg(rd, (reg(rd) + reg(rs)) & 0xFFFF_FFFF)
             when 0b01
               sub(reg(rd), reg(rs))
             when 0b10
-              @regs[rd] = reg(rs)
+              set_reg(rd, reg(rs))
             when 0b11
               bx(reg(rs))
             end
@@ -254,7 +254,7 @@ module RubyboyAdvance
               if is_push
                 @bus.write32(current_address, reg(i))
               else
-                @regs[i] = @bus.read32(current_address)
+                set_reg(i, @bus.read32(current_address))
               end
               current_address += 4
             end
@@ -263,7 +263,7 @@ module RubyboyAdvance
               if is_push
                 @bus.write32(current_address, reg(14))
               else
-                @regs[15] = @bus.read32(current_address)
+                set_reg(15, @bus.read32(current_address))
               end
             end
 
@@ -281,7 +281,7 @@ module RubyboyAdvance
           new_rb = rb + (n << 2)
           is_first = true
           if n == 0
-            if is_load then @regs[15] = @bus.read32(current_address)
+            if is_load then set_reg(15, @bus.read32(current_address))
             else @bus.write32(current_address, reg(15) + 2)
             end
             new_rb = rb + 0x40
@@ -290,7 +290,7 @@ module RubyboyAdvance
               next unless rlist[i] == 1
 
               if is_load
-                @regs[i] = @bus.read32(current_address)
+                set_reg(i, @bus.read32(current_address))
               else
                 write_value = if i != rb_index
                                 reg(i)
@@ -348,8 +348,8 @@ module RubyboyAdvance
         return 1
       end
 
-      opcode = @bus.read32(address)
-      self.pc += 4
+      opcode = fetch(address, 4)
+      @regs[15] += 4
       return 1 unless executable?(opcode >> 28)
 
       instruction = determine_instruction(opcode)
@@ -380,7 +380,7 @@ module RubyboyAdvance
         new_rn = opcode[23] == 0 ? rn - (multiplicand << 2) : rn + (multiplicand << 2)
         is_first = true
         if n == 0
-          if is_load then @regs[15] = @bus.read32(current_address)
+          if is_load then set_reg(15, @bus.read32(current_address))
           else @bus.write32(current_address, reg(15) + 4)
           end
         else
@@ -388,7 +388,7 @@ module RubyboyAdvance
             next unless rlist[i] == 1
 
             if is_load
-              @regs[i] = @bus.read32(current_address)
+              set_reg(i, @bus.read32(current_address))
             else
               write_value = if i == rn_index && !is_first && opcode[21] == 1
                               new_rn
@@ -527,7 +527,7 @@ module RubyboyAdvance
           return 1
         end
 
-        @regs[rd] = result
+        set_reg(rd, result)
 
       when :single_data_transfer
         offset =
@@ -546,7 +546,7 @@ module RubyboyAdvance
         transfer(opcode, offset) do |addr|
           rd = opcode[12..15]
           if opcode[20] == 1
-            @regs[rd] = opcode[22] == 0 ? ldr(addr) : @bus.read(addr)
+            set_reg(rd, opcode[22] == 0 ? ldr(addr) : @bus.read(addr))
           else
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             opcode[22] == 0 ? @bus.write32(addr, value) : @bus.write(addr, value & 0xFF)
@@ -562,7 +562,7 @@ module RubyboyAdvance
         write_value = reg(rm_index)
         read_value = is_byte ? @bus.read(addr) : ldr(addr)
         is_byte ? @bus.write(addr, write_value & 0xFF) : @bus.write32(addr, write_value)
-        @regs[rd_index] = read_value
+        set_reg(rd_index, read_value)
 
       when :multiply
         case opcode[21]
@@ -597,9 +597,9 @@ module RubyboyAdvance
             rd = opcode[12..15]
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             @bus.write16(addr, value & 0xFFFF)
-          when 0b101 then @regs[opcode[12..15]] = ldrh(addr)
-          when 0b110 then @regs[opcode[12..15]] = ldrsb(addr)
-          when 0b111 then @regs[opcode[12..15]] = ldrsh(addr)
+          when 0b101 then set_reg(opcode[12..15], ldrh(addr))
+          when 0b110 then set_reg(opcode[12..15], ldrsb(addr))
+          when 0b111 then set_reg(opcode[12..15], ldrsh(addr))
           else
             raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
           end
@@ -639,6 +639,22 @@ module RubyboyAdvance
     end
 
     private
+
+    # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
+    def fetch(address, size)
+      if address == @next_address
+        opcode = @next_opcode
+        @next_opcode = @after_next_opcode
+      else
+        opcode = read_opcode(address, size)
+        @next_opcode = read_opcode(address + size, size)
+      end
+      @after_next_opcode = read_opcode(address + (size * 2), size)
+      @next_address = address + size
+      opcode
+    end
+
+    def read_opcode(address, size) = size == 2 ? @bus.read16(address) : @bus.read32(address)
 
     def swi
       @spsrs[:svc] = @cpsr
@@ -726,8 +742,15 @@ module RubyboyAdvance
       @regs[15]
     end
 
+    # Any write to r15 refills the pipeline, even to the next address
     def pc=(value)
       @regs[15] = value
+      @next_address = nil
+    end
+
+    def set_reg(index, value)
+      @regs[index] = value
+      @next_address = nil if index == 15
     end
 
     # Reads a register as an instruction operand. pc already points past the

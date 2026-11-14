@@ -119,7 +119,7 @@ RSpec.describe RubyboyAdvance::Cpu do
 
   describe 'HALTCNT' do
     let(:rom) { [] }
-    let(:code) { [0x00, 0x00, 0xC1, 0xE5] + ([0x00, 0x00, 0xA0, 0xE1] * 3) } # strb r0, [r1], then mov r0, r0
+    let(:code) { [0x00, 0x00, 0xC1, 0xE5] + ([0x00, 0x00, 0xA0, 0xE1] * 5) } # strb r0, [r1], then mov r0, r0
 
     before do
       regs[0] = 0x01             # bit 7 clear: Halt (bits 0-6 are unused)
@@ -161,6 +161,103 @@ RSpec.describe RubyboyAdvance::Cpu do
         2.times { cpu.exec }
 
         expect(regs[15]).to eq(0x0800_0008)
+      end
+    end
+  end
+
+  describe 'prefetch' do
+    let(:rom) { [] }
+    let(:base) { 0x0300_0000 }
+
+    def run_arm(*opcodes)
+      opcodes.each_with_index { |opcode, i| bus.write32(base + (i * 4), opcode) }
+      regs[15] = base
+      opcodes.size.times { cpu.exec }
+    end
+
+    it 'runs the two ARM instructions it has read even when the ones before rewrite them' do
+      regs[1] = base + 8
+      regs[2] = base + 12
+
+      run_arm(0xE5810000, 0xE5820000, 0xE3A03001, 0xE3A04002) # str r0, [r1]; str r0, [r2]; mov r3, #1; mov r4, #2
+
+      expect([regs[3], regs[4]]).to eq([1, 2])
+    end
+
+    it 'reads an ARM instruction three ahead after it is rewritten' do
+      regs[1] = base + 12
+      regs[5] = 0xE3A04009 # mov r4, #9
+
+      run_arm(0xE5815000, 0xE1A00000, 0xE1A00000, 0xE3A04002) # str r5, [r1]; mov r0, r0; mov r0, r0; mov r4, #2
+
+      expect(regs[4]).to eq(9)
+    end
+
+    it 'reads again after a branch, even to the next instruction' do
+      regs[1] = base + 8
+      regs[5] = 0xE3A04009 # mov r4, #9
+
+      run_arm(0xE5815000, 0xEAFFFFFF, 0xE3A04002) # str r5, [r1]; b to the next; mov r4, #2
+
+      expect(regs[4]).to eq(9)
+    end
+
+    { 'mov pc, r2' => 0xE1A0F002, 'ldr pc, [r3]' => 0xE593F000, 'ldmia r3, {pc}' => 0xE8938000 }.each do |name, jump|
+      it "reads again after #{name}, even to the next instruction" do
+        bus.write32(0x0300_0100, base + 8)
+        regs[1] = base + 8
+        regs[2] = base + 8
+        regs[3] = 0x0300_0100
+        regs[5] = 0xE3A04009 # mov r4, #9
+
+        run_arm(0xE5815000, jump, 0xE3A04002) # str r5, [r1]; the jump; mov r4, #2
+
+        expect(regs[4]).to eq(9)
+      end
+    end
+
+    it 'reads Thumb instructions again after movs pc returns to Thumb at the next address' do
+      bus.write16(base + 4, 0x2409) # mov r4, #9
+      bus.write16(base + 6, 0x2502) # mov r5, #2
+      cpu.instance_variable_set(:@cpsr, 0x13) # SVC
+      cpu.instance_variable_get(:@spsrs)[:svc] = 0x3F # System, Thumb
+      regs[0] = base + 4
+
+      run_arm(0xE1B0F000) # movs pc, r0
+      2.times { cpu.exec }
+
+      expect([regs[4], regs[5]]).to eq([9, 2])
+    end
+
+    describe 'in Thumb' do
+      def run_thumb(*opcodes)
+        opcodes.each_with_index { |opcode, i| bus.write16(base + (i * 2), opcode) }
+        regs[15] = base
+        cpu.instance_variable_set(:@cpsr, 0x3F)
+        opcodes.size.times { cpu.exec }
+      end
+
+      it 'runs the two instructions it has read even when the ones before rewrite them' do
+        regs[1] = base + 4
+        regs[2] = base + 6
+
+        run_thumb(0x8008, 0x8010, 0x2301, 0x2402) # strh r0, [r1]; strh r0, [r2]; mov r3, #1; mov r4, #2
+
+        expect([regs[3], regs[4]]).to eq([1, 2])
+      end
+
+      { 'mov pc, r2' => 0x4697, 'pop {pc}' => 0xBD00 }.each do |name, jump|
+        it "reads again after #{name}, even to the next instruction" do
+          regs[1] = base + 4
+          regs[2] = base + 4
+          regs[5] = 0x2409 # mov r4, #9
+          regs[13] = 0x0300_0100
+          bus.write32(0x0300_0100, base + 4)
+
+          run_thumb(0x800D, jump, 0x2402) # strh r5, [r1]; the jump; mov r4, #2
+
+          expect(regs[4]).to eq(9)
+        end
       end
     end
   end
