@@ -99,6 +99,32 @@ RSpec.describe RubyboyAdvance::Dma do
     expect(bus.read16(0x0400_00BA)).to eq(0x0200)
   end
 
+  describe 'to the EEPROM' do
+    let(:bus) do
+      RubyboyAdvance::Bus.new(
+        rom, [], ppu, RubyboyAdvance::Eeprom.new, interrupt,
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+      )
+    end
+
+    def put_bits(addr, bits) = bits.each_with_index { |bit, i| bus.write16(addr + (i * 2), bit) }
+
+    [[73, 9, 6], [81, 17, 14]].each do |write_count, read_count, address_size|
+      it "writes and reads a block with #{address_size}-bit addresses after a first count of #{write_count}" do
+        address = (address_size - 1).downto(0).map { 3[it] }
+        data = 64.times.map { it.even? ? 1 : 0 }
+        put_bits(0x0200_0000, [1, 0] + address + data + [0])
+        put_bits(0x0200_1000, [1, 1] + address + [0])
+
+        start(3, 0x0200_0000, 0x0D00_0000, write_count, 0x8000)
+        start(3, 0x0200_1000, 0x0D00_0000, read_count, 0x8000)
+        start(3, 0x0D00_0000, 0x0200_2000, 68, 0x8000)
+
+        expect(halfwords(0x0200_2000, 68)).to eq([0, 0, 0, 0] + data)
+      end
+    end
+  end
+
   describe 'at VBlank and HBlank' do
     let(:table) { 0x0200_1000 }
 
