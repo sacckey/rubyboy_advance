@@ -132,6 +132,12 @@ RSpec.describe RubyboyAdvance::Cpu do
 
       before { regs[15] = 0 }
 
+      it 'takes 1 cycle for each call while stopped' do
+        cpu.exec
+
+        expect([cpu.exec, cpu.exec]).to eq([1, 1])
+      end
+
       it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
         4.times { cpu.exec }
 
@@ -162,6 +168,30 @@ RSpec.describe RubyboyAdvance::Cpu do
 
         expect(regs[15]).to eq(0x0800_0008)
       end
+    end
+  end
+
+  describe 'cycles' do
+    let(:nop) { [0x00, 0x00, 0xA0, 0xE1] } # mov r0, r0
+    let(:rom) { nop * 4 }
+
+    it 'takes three opcode reads after a jump and one for each instruction after it' do
+      expect([cpu.exec, cpu.exec]).to eq([8 * 3, 8])
+    end
+
+    it 'reads Thumb opcodes as halfwords' do
+      cpu.instance_variable_set(:@cpsr, 0x3F)
+
+      expect([cpu.exec, cpu.exec]).to eq([5 * 3, 5])
+    end
+
+    it 'adds the data accesses of the instruction' do
+      [0xE5910000, 0xE5810000].each_with_index { |opcode, i| bus.write32(0x0300_0000 + (i * 4), opcode) } # ldr r0, [r1]; str r0, [r1]
+      regs[1] = 0x0200_0000
+      regs[15] = 0x0300_0000
+      bus.take_cycles
+
+      expect([cpu.exec, cpu.exec]).to eq([3 + 6, 1 + 6])
     end
   end
 

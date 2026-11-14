@@ -5,6 +5,24 @@ module RubyboyAdvance
     attr_reader :interrupt
     attr_writer :cpu
 
+    COSTS16 = Array.new(0x100) do |i|
+      case i
+      when 0x02 then 3
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F then 5
+      else 1
+      end
+    end.freeze
+
+    COSTS32 = Array.new(0x100) do |i|
+      case i
+      when 0x02 then 6
+      when 0x05, 0x06 then 2
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D then 8
+      when 0x0E, 0x0F then 5
+      else 1
+      end
+    end.freeze
+
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 
@@ -23,9 +41,57 @@ module RubyboyAdvance
       @dma = Dma.new
       @timer = timer
       @keypad = keypad
+      @cycles = 0
+    end
+
+    def take_cycles
+      cycles = @cycles
+      @cycles = 0
+      cycles
     end
 
     def read(addr)
+      @cycles += COSTS16[(addr >> 24) & 0xFF]
+      raw_read(addr)
+    end
+
+    def write(addr, value)
+      @cycles += COSTS16[(addr >> 24) & 0xFF]
+      raw_write(addr, value)
+    end
+
+    def read16(addr)
+      @cycles += COSTS16[(addr >> 24) & 0xFF]
+      raw_read16(addr)
+    end
+
+    def write16(addr, value)
+      @cycles += COSTS16[(addr >> 24) & 0xFF]
+      raw_write16(addr, value)
+    end
+
+    def read32(addr)
+      @cycles += COSTS32[(addr >> 24) & 0xFF]
+      raw_read32(addr)
+    end
+
+    def write32(addr, value)
+      @cycles += COSTS32[(addr >> 24) & 0xFF]
+      raw_write32(addr, value)
+    end
+
+    # Runs the DMA channels waiting for :vblank or :hblank, which the PPU yields from step
+    def run_dma(timing)
+      @dma.trigger(timing, self)
+    end
+
+    def hint_eeprom_size(count)
+      @cartram.hint_size(count) if @eeprom
+    end
+
+    private
+
+    def raw_read(addr)
       case addr >> 24
       when 0x00 then return @bios[addr & 0x3FFF]
       when 0x02 then return @ewram[addr & 0x3FFFF]
@@ -51,27 +117,27 @@ module RubyboyAdvance
       0xff
     end
 
-    def write(addr, value)
+    def raw_write(addr, value)
       case addr >> 24
-      when 0x05 then write16(addr, value * 0x0101)
-      when 0x06 then write16(addr, value * 0x0101) if @ppu.bg_vram?(addr)
+      when 0x05 then raw_write16(addr, value * 0x0101)
+      when 0x06 then raw_write16(addr, value * 0x0101) if @ppu.bg_vram?(addr)
       when 0x07 then nil
       else write8(addr, value)
       end
     end
 
-    def read16(addr)
+    def raw_read16(addr)
       return @cartram.read_bit if eeprom?(addr)
 
       case addr >> 24
-      when 0x0E, 0x0F then read(addr) * 0x0101
+      when 0x0E, 0x0F then raw_read(addr) * 0x0101
       else
         addr &= ~1
-        read(addr) + (read(addr + 1) << 8)
+        raw_read(addr) + (raw_read(addr + 1) << 8)
       end
     end
 
-    def write16(addr, value)
+    def raw_write16(addr, value)
       return @cartram.write_bit(value) if eeprom?(addr)
 
       case addr >> 24
@@ -83,35 +149,24 @@ module RubyboyAdvance
       end
     end
 
-    def read32(addr)
+    def raw_read32(addr)
       case addr >> 24
-      when 0x0E, 0x0F then read(addr) * 0x0101_0101
+      when 0x0E, 0x0F then raw_read(addr) * 0x0101_0101
       else
         addr &= ~3
-        read16(addr) + (read16(addr + 2) << 16)
+        raw_read16(addr) + (raw_read16(addr + 2) << 16)
       end
     end
 
-    def write32(addr, value)
+    def raw_write32(addr, value)
       case addr >> 24
       when 0x0E, 0x0F then write8(addr, (value >> ((addr & 3) << 3)) & 0xFF)
       else
         addr &= ~3
-        write16(addr, value & 0xFFFF)
-        write16(addr + 2, (value >> 16) & 0xFFFF)
+        raw_write16(addr, value & 0xFFFF)
+        raw_write16(addr + 2, (value >> 16) & 0xFFFF)
       end
     end
-
-    # Runs the DMA channels waiting for :vblank or :hblank, which the PPU yields from step
-    def run_dma(timing)
-      @dma.trigger(timing, self)
-    end
-
-    def hint_eeprom_size(count)
-      @cartram.hint_size(count) if @eeprom
-    end
-
-    private
 
     # ponytail: 16-bit accesses only
     def eeprom?(addr)

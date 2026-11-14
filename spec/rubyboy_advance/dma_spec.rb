@@ -125,10 +125,27 @@ RSpec.describe RubyboyAdvance::Dma do
     end
   end
 
+  it 'counts the cycles of each halfword it reads and writes' do
+    bus.take_cycles
+
+    start(3, 0x0200_0000, 0x0300_0000, 4, 0x8000) # four register writes, then EWRAM to IWRAM four times
+
+    expect(bus.take_cycles).to eq(4 + (4 * (3 + 1)))
+  end
+
   describe 'at VBlank and HBlank' do
     let(:table) { 0x0200_1000 }
 
     before { 161.times { |i| bus.write16(table + (i * 2), i + 1) } } # entry i is i + 1
+
+    it 'leaves the cycles of an HBlank transfer for whoever asks next' do
+      start(0, table, 0x0300_0000, 2, 0xA000) # HBlank
+      bus.take_cycles
+
+      step(1007)
+
+      expect(bus.take_cycles).to eq(2 * (3 + 1))
+    end
 
     it 'copies as VBlank starts and clears the enable bit without repeat' do
       start(0, 0x0200_0000, 0x0300_0000, 3, 0x9000) # VBlank

@@ -37,6 +37,19 @@ module RubyboyAdvance
     def exec
       return 1 if @interrupt.cpu_halted?
 
+      run_instruction
+      @bus.take_cycles
+    end
+
+    # Whether the instruction being executed is in the BIOS (0x0000-0x3FFF).
+    # pc is already past it, so an instruction at 0x3FFC leaves pc at 0x4000.
+    def in_bios?
+      pc <= 0x4000
+    end
+
+    private
+
+    def run_instruction
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
       @regs[15] &= flag_t ? ~1 : ~3
@@ -47,7 +60,7 @@ module RubyboyAdvance
         self.lr = pc + 4
         @cpsr = (@cpsr & ~0x3F) | 0x80 | 0x12
         self.pc = 0x18
-        return 1
+        return
       end
 
       address = pc
@@ -316,7 +329,7 @@ module RubyboyAdvance
             # Format 17: Software interrupt
             swi
           else
-            return 1 unless executable?(opcode[8..11])
+            return unless executable?(opcode[8..11])
 
             offset = opcode[0..7]
             offset -= 0x100 if offset[7] == 1
@@ -345,12 +358,12 @@ module RubyboyAdvance
           end
         end
 
-        return 1
+        return
       end
 
       opcode = fetch(address, 4)
       @regs[15] += 4
-      return 1 unless executable?(opcode >> 28)
+      return unless executable?(opcode >> 28)
 
       instruction = determine_instruction(opcode)
       case instruction
@@ -524,7 +537,7 @@ module RubyboyAdvance
 
         case code
         when 0x08, 0x09, 0x0A, 0x0B
-          return 1
+          return
         end
 
         set_reg(rd, result)
@@ -628,17 +641,7 @@ module RubyboyAdvance
       else
         raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
       end
-      # TODO: Implement proper cycle counting and other side effects for each instruction.
-      1
     end
-
-    # Whether the instruction being executed is in the BIOS (0x0000-0x3FFF).
-    # pc is already past it, so an instruction at 0x3FFC leaves pc at 0x4000.
-    def in_bios?
-      pc <= 0x4000
-    end
-
-    private
 
     # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
     def fetch(address, size)

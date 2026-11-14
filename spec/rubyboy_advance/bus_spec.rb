@@ -263,4 +263,50 @@ RSpec.describe RubyboyAdvance::Bus do
       expect(bus.read(0x0200_0002)).to eq(0)
     end
   end
+
+  describe 'cycles' do
+    let(:bus) do
+      described_class.new(
+        [0] * 4, [0] * 4, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt,
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+      )
+    end
+
+    def cycles
+      bus.take_cycles
+      yield
+      bus.take_cycles
+    end
+
+    {
+      'the BIOS' => [0x0000_0000, 1, 1],
+      'EWRAM' => [0x0200_0000, 3, 6],
+      'IWRAM' => [0x0300_0000, 1, 1],
+      'I/O' => [0x0400_0000, 1, 1],
+      'palette RAM' => [0x0500_0000, 1, 2],
+      'VRAM' => [0x0600_0000, 1, 2],
+      'OAM' => [0x0700_0000, 1, 1],
+      'the ROM' => [0x0800_0000, 5, 8],
+      'the last ROM mirror' => [0x0D00_0000, 5, 8],
+      'cartridge RAM' => [0x0E00_0000, 5, 5],
+      'unused memory' => [0x0100_0000, 1, 1],
+      'the top of the address space' => [0xFF00_0000, 1, 1],
+      'an address past 32 bits' => [0x1_0000_0000, 1, 1]
+    }.each do |name, (addr, cost, cost32)|
+      it "counts #{cost} for each 8- and 16-bit access and #{cost32} for each 32-bit one to #{name}" do
+        reads = [cycles { bus.read(addr) }, cycles { bus.read16(addr) }, cycles { bus.read32(addr) }]
+        writes = [cycles { bus.write(addr, 0) }, cycles { bus.write16(addr, 0) }, cycles { bus.write32(addr, 0) }]
+
+        expect([reads, writes]).to eq([[cost, cost, cost32]] * 2)
+      end
+    end
+
+    it 'adds up the accesses until take_cycles, which starts again from 0' do
+      bus.take_cycles
+      bus.read16(0x0200_0000)
+      bus.write32(0x0800_0000, 0)
+
+      expect([bus.take_cycles, bus.take_cycles]).to eq([11, 0])
+    end
+  end
 end
