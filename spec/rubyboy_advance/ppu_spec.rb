@@ -970,6 +970,179 @@ RSpec.describe RubyboyAdvance::Ppu do
     end
   end
 
+  describe 'affine BGs' do
+    let(:bd) { 0x7FFF } # the backdrop
+
+    def pixels(y, *xs) = xs.map { |x| ppu.buffer[y * 240 + x] }
+
+    # The reference points are read in as line 0 starts, which the first frame begins past
+    def draw_second_frame = step(1232 * 228 + 1232 * 160)
+
+    before do
+      # 128x128 BG2: one-byte map at 0x06000000, 256-color tiles at 0x06004000
+      16.times do |ty|
+        8.times do |pair| # entry (tx, ty) is tile 1 where tx + ty is even, tile 2 where it is odd
+          bus.write16(0x0600_0000 + ty * 16 + pair * 2, ty.even? ? 0x0201 : 0x0102)
+        end
+      end
+      8.times do |row|
+        bus.write32(0x0600_4040 + row * 8, 0x0403_0201) # tile 1: x 0-7 are colors 1-8
+        bus.write32(0x0600_4044 + row * 8, 0x0807_0605)
+      end
+      16.times { |k| bus.write32(0x0600_4080 + k * 4, 0x1414_1414) } # tile 2: all color 20
+      bus.write16(0x0500_0000, bd)
+      [*1..8, 20].each { |color| bus.write16(0x0500_0000 + color * 2, color) } # each color shows as its number
+      bus.write16(0x0400_000C, 0x0004) # BG2CNT: 128x128, tiles at 0x06004000, map at 0x06000000, no wraparound
+      bus.write16(0x0400_0020, 0x0100) # PA: 1.0
+      bus.write16(0x0400_0026, 0x0100) # PD: 1.0
+      bus.write16(0x0400_0000, 0x0401) # DISPCNT: mode 1, BG2
+    end
+
+    it 'draws BG2 in mode 1 from one-byte map entries and 256-color tiles, as it is with PA and PD at 1.0' do
+      draw_second_frame
+
+      expect(pixels(0, 0, 1, 7, 8)).to eq([1, 2, 8, 20])
+      expect(pixels(8, 0, 8)).to eq([20, 1])
+    end
+
+    it 'shows nothing outside the BG unless BG2CNT bit 13 wraps it around' do
+      draw_second_frame
+      expect(pixels(0, 127, 128)).to eq([20, bd])
+
+      bus.write16(0x0400_000C, 0x2004) # bit 13: wraparound
+      step(1232 * 228)
+      expect(pixels(0, 128, 136)).to eq([1, 20])
+    end
+
+    it 'reads BG2X as a signed 28-bit number with 8 bits of fraction' do
+      bus.write32(0x0400_0028, 0x7FFF_FF00) # -1.0, with bits 28-31 left out
+
+      draw_second_frame
+
+      expect(pixels(0, 0, 1, 2)).to eq([bd, 1, 2])
+    end
+
+    it 'steps by PA across the line, so 0.5 doubles the width and -1.0 mirrors it' do
+      bus.write16(0x0400_0020, 0x0080) # PA: 0.5
+      draw_second_frame
+      expect(pixels(0, 0, 1, 2, 3)).to eq([1, 1, 2, 2])
+
+      bus.write16(0x0400_0020, 0xFF00) # PA: -1.0
+      bus.write32(0x0400_0028, 7 << 8) # BG2X: 7.0
+      step(1232 * 228)
+      expect(pixels(0, 0, 1, 7, 8)).to eq([8, 7, 1, bd])
+    end
+
+    it 'steps tex_y by PC across the line' do
+      bus.write16(0x0400_0024, 0x0100) # PC: 1.0, so x 8 looks at (8, 8)
+
+      draw_second_frame
+
+      expect(pixels(0, 8)).to eq([1])
+    end
+
+    it 'moves the reference point by PB and PD after each line' do
+      bus.write16(0x0400_0022, 0x0100) # PB: 1.0
+      bus.write16(0x0400_0026, 0x0000) # PD: 0
+
+      draw_second_frame
+
+      expect([pixels(1, 0), pixels(8, 0, 8)]).to eq([[2], [20, 1]]) # line y starts at (y, 0)
+    end
+
+    it 'moves the reference point by a negative PD too' do
+      bus.write16(0x0400_0026, 0xFF00) # PD: -1.0
+      bus.write32(0x0400_002C, 15 << 8) # BG2Y: 15.0
+
+      draw_second_frame
+
+      expect([pixels(0, 0, 8), pixels(8, 0, 8)]).to eq([[20, 1], [1, 20]]) # tex_y 15 and 7
+    end
+
+    it 'reads BG2Y again as the line after it is written starts, instead of adding PD to it' do
+      step(1232 * 228 + 1232 * 30 + 500) # into line 30 of the second frame, before it is drawn
+      bus.write32(0x0400_002C, 7 << 8) # BG2Y: 7.0
+
+      step(1232 * 130)
+
+      expect([pixels(30, 0, 8), pixels(31, 0, 8), pixels(32, 0, 8)]).to eq([[20, 1], [1, 20], [20, 1]]) # tex_y 30, 7, 8
+    end
+
+    it 'does not move the reference point on lines where BG2 is off' do
+      bus.write16(0x0400_0000, 0x0001) # DISPCNT: mode 1, BG2 off
+      step(1232 * 228 + 1232 * 8)
+      bus.write16(0x0400_0000, 0x0401) # BG2 on from line 8
+
+      step(1232 * 152)
+
+      expect([pixels(8, 0, 8), pixels(16, 0, 8)]).to eq([[1, 20], [20, 1]]) # tex_y 0 and 8
+    end
+
+    it 'wraps the map address around at 64 KB' do
+      bus.write16(0x0400_000C, 0xDF04) # BG2CNT: 1024x1024, tiles at 0x06004000, map at 0x0600F800
+      bus.write32(0x0400_002C, 128 << 8) # BG2Y: 128.0, so the map row starts at 0x0600F800 + 0x800
+
+      draw_second_frame
+
+      expect(pixels(0, 0, 8)).to eq([1, 20]) # the map at 0x06000000
+    end
+
+    it 'lets the layer behind show through color 0' do
+      bus.write16(0x0600_0000, 0x0200) # BG2 map entry (0, 0): tile 0, which is empty
+      bus.write16(0x0400_0008, 0x0009) # BG0CNT: priority 1, tiles at 0x06008000, the same map, read as tile 0x200
+      8.times { |row| bus.write32(0x0600_C000 + row * 4, 0x3333_3333) } # BG0 tile 0x200: all color 3
+      bus.write16(0x0400_0000, 0x0501) # DISPCNT: mode 1, BG0 and BG2
+
+      draw_second_frame
+
+      expect(pixels(0, 0, 8)).to eq([3, 20]) # BG0, then BG2 in front
+    end
+
+    describe 'with BG3' do
+      before do
+        bus.write16(0x0400_000E, 0x0004) # BG3CNT: as BG2CNT
+        bus.write16(0x0400_0030, 0x0100) # BG3PA: 1.0
+        bus.write16(0x0400_0036, 0x0100) # BG3PD: 1.0
+      end
+
+      it 'draws BG3 rotated in mode 2' do
+        bus.write16(0x0400_0000, 0x0802) # DISPCNT: mode 2, BG3
+
+        draw_second_frame
+
+        expect(pixels(0, 0, 1, 8)).to eq([1, 2, 20])
+      end
+
+      it 'does not move the reference point of BG3 in mode 1' do
+        bus.write16(0x0400_0000, 0x0801) # DISPCNT: mode 1, BG3
+        step(1232 * 228 + 1232 * 8)
+        bus.write16(0x0400_0000, 0x0802) # mode 2 from line 8
+
+        step(1232 * 152)
+
+        expect(pixels(8, 0, 8)).to eq([1, 20]) # tex_y 0
+      end
+
+      it 'leaves BG3 out in mode 1' do
+        bus.write16(0x0400_0000, 0x0801) # DISPCNT: mode 1, BG3
+
+        draw_second_frame
+
+        expect(pixels(0, 0)).to eq([bd])
+      end
+
+      it 'leaves BG0 out in mode 2' do
+        bus.write16(0x0400_0008, 0x0008) # BG0CNT: tiles at 0x06008000, map at 0x06000000, whose entry (0, 0) is tile 0x201
+        bus.write32(0x0600_C020, 0x1111_1111) # tile 0x201 row 0: all color 1
+        bus.write16(0x0400_0000, 0x0102) # DISPCNT: mode 2, BG0
+
+        draw_second_frame
+
+        expect(pixels(0, 0)).to eq([bd])
+      end
+    end
+  end
+
   describe 'lines' do
     it 'draws a line once, when its HBlank starts at cycle 1007' do
       bus.write16(0x0500_0000, 0x1111) # backdrop
