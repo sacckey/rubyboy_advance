@@ -25,7 +25,7 @@ module RubyboyAdvance
       @window_masks = Array.new(240, 0x3F)
       @window_v_flags = [false, false] # whether WIN0 and WIN1 cover the current line
       @affine_refs = [[0, 0], [0, 0]] # where the left end of the line looks in BG2 and BG3, in 1/256 pixels
-      @affine_written = [false, false] # whether BGnX or BGnY was written since the last line
+      @affine_written = [[false, false], [false, false]] # whether BGnX and BGnY were written since the last line
     end
 
     def step(cycles)
@@ -161,7 +161,7 @@ module RubyboyAdvance
       # A new LYC takes effect at once, not at the next line (NanoBoyAdvance registers.cc)
       update_vcount_match if offset == 5
       # A new BGnX or BGnY is read in before the next line, not at once (NanoBoyAdvance background.cc)
-      @affine_written[(offset - 0x28) >> 4] = true if (0x28..0x2F).cover?(offset) || (0x38..0x3F).cover?(offset)
+      @affine_written[(offset - 0x28) >> 4][(offset >> 2) & 1] = true if (0x28..0x2F).cover?(offset) || (0x38..0x3F).cover?(offset)
     end
 
     def read_palram(addr)
@@ -272,10 +272,12 @@ module RubyboyAdvance
     # or if those were written during the line before (NanoBoyAdvance background.cc InitBackground)
     def load_affine_refs
       2.times do |i|
-        next unless vcount == 0 || @affine_written[i]
+        2.times do |axis| # X and Y each, so the other keeps what PB or PD added (NanoBoyAdvance background.cc)
+          next unless vcount == 0 || @affine_written[i][axis]
 
-        @affine_refs[i] = [affine_point(0x28 + i * 0x10), affine_point(0x2C + i * 0x10)]
-        @affine_written[i] = false
+          @affine_refs[i][axis] = affine_point(0x28 + i * 0x10 + axis * 4)
+          @affine_written[i][axis] = false
+        end
       end
     end
 

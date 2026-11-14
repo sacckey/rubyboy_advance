@@ -1169,6 +1169,25 @@ RSpec.describe RubyboyAdvance::Ppu do
       expect([pixels(30, 0, 8), pixels(31, 0, 8), pixels(32, 0, 8)]).to eq([[20, 1], [1, 20], [20, 1]]) # tex_y 30, 7, 8
     end
 
+    it 'reads only BG2X again when only BG2X is written, so Y keeps what PD added' do
+      step(1232 * 228 + 1232 * 10 + 1007) # through the HBlank of line 10 of the second frame
+      bus.write32(0x0400_0028, 0) # BG2X: 0
+
+      step(1232 * 20)
+
+      expect(pixels(11, 0, 8)).to eq([20, 1]) # tex_y 11, not 0
+    end
+
+    it 'reads only BG2Y again when only BG2Y is written, so X keeps what PB added' do
+      bus.write16(0x0400_0022, 0x0100) # PB: 1.0
+      step(1232 * 228 + 1232 * 10 + 1007) # through the HBlank of line 10 of the second frame
+      bus.write32(0x0400_002C, 0) # BG2Y: 0
+
+      step(1232 * 20)
+
+      expect(pixels(11, 0, 5)).to eq([20, 1]) # line 11 starts at (11, 0), not (0, 0)
+    end
+
     it 'does not move the reference point on lines where BG2 is off' do
       bus.write16(0x0400_0000, 0x0001) # DISPCNT: mode 1, BG2 off
       step(1232 * 228 + 1232 * 8)
@@ -1212,6 +1231,16 @@ RSpec.describe RubyboyAdvance::Ppu do
         draw_second_frame
 
         expect(pixels(0, 0, 1, 8)).to eq([1, 2, 20])
+      end
+
+      it 'reads only BG3X again when only BG3X is written, so Y keeps what PD added' do
+        bus.write16(0x0400_0000, 0x0802) # DISPCNT: mode 2, BG3
+        step(1232 * 228 + 1232 * 10 + 1007) # through the HBlank of line 10 of the second frame
+        bus.write32(0x0400_0038, 8 << 8) # BG3X: 8.0
+
+        step(1232 * 20)
+
+        expect(pixels(11, 0, 8)).to eq([1, 20]) # line 11 starts at (8, 11), not (8, 0)
       end
 
       it 'does not move the reference point of BG3 in mode 1' do
