@@ -24,6 +24,8 @@ module RubyboyAdvance
       @second_colors = Array.new(240, 0)
       @window_masks = Array.new(240, 0x3F)
       @window_v_flags = [false, false] # whether WIN0 and WIN1 cover the current line
+      @affine_refs = [[0, 0], [0, 0]] # where the left end of the line looks in BG2 and BG3, in 1/256 pixels
+      @affine_written = [[false, false], [false, false]] # whether BGnX and BGnY were written since the last line
     end
 
     def step(cycles)
@@ -34,20 +36,27 @@ module RubyboyAdvance
         unless hblank
           if vcount < 160
             dispcnt = read_io16(0)
-            case dispcnt & 0x7
-            when 0
+            mode = dispcnt & 0x7
+            case mode
+            when 0, 1, 2
               background = @palram[0] | (@palram[1] << 8)
               @buffer.fill(background, vcount * 240, 240)
               @top_layers.fill(5)
               @second_layers.fill(5)
               @second_colors.fill(background)
-              bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
+              bg_range = case mode
+                         when 0 then (0..3)
+                         when 1 then (0..2)
+                         when 2 then (2..3)
+                         end
+              bgs = bg_range.select { |n| dispcnt[8 + n] == 1 }
               bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
               obj_colors, obj_priorities, obj_alphas, obj_window = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}, {}, {}]
               update_window_masks(obj_window)
               3.downto(0) do |priority|
                 (bgs_by_priority[priority] || []).sort.reverse.each do |n|
-                  draw_bg(n, vcount)
+                  # BG2 in mode 1 and BG2 and BG3 in mode 2 rotate and scale
+                  n >= 2 && mode != 0 ? draw_affine_bg(n, vcount) : draw_bg(n, vcount)
                 end
                 draw_objs(obj_colors, obj_priorities, priority)
               end
@@ -105,6 +114,8 @@ module RubyboyAdvance
             end
           end
 
+          advance_affine_refs if vcount < 160
+
           self.hblank = true
           @interrupt.request(:hblank) if dispstat[4] == 1
           yield :hblank if vcount < 160 # after the flag, so a DMA reading DISPSTAT sees it
@@ -124,6 +135,7 @@ module RubyboyAdvance
         self.hblank = false
         update_vcount_match
         update_window_v_flags
+        load_affine_refs if vcount < 160
         yield :vblank if vcount == 160 # once DISPSTAT is up to date for line 160
 
         @cycles -= 1232
@@ -148,6 +160,8 @@ module RubyboyAdvance
       end
       # A new LYC takes effect at once, not at the next line (NanoBoyAdvance registers.cc)
       update_vcount_match if offset == 5
+      # A new BGnX or BGnY is read in before the next line, not at once (NanoBoyAdvance background.cc)
+      @affine_written[(offset - 0x28) >> 4][(offset >> 2) & 1] = true if (0x28..0x2F).cover?(offset) || (0x38..0x3F).cover?(offset)
     end
 
     def read_palram(addr)
@@ -220,6 +234,74 @@ module RubyboyAdvance
       end
     end
 
+    # Rotated and scaled BG2 or BG3: a map of one-byte tile numbers, always 256 colors and no flips
+    # (NanoBoyAdvance background.inl)
+    def draw_affine_bg(n, y)
+      i = n - 2
+      bgncnt = read_io16(8 + n * 2)
+      size = 128 << (bgncnt >> 14) # 128, 256, 512 or 1024 pixels square
+      char_base = bgncnt[2..3] << 14
+      map_base = bgncnt[8..12] << 11
+      pa = signed16(read_io16(0x20 + i * 0x10))
+      pc = signed16(read_io16(0x24 + i * 0x10))
+      ref_x, ref_y = @affine_refs[i]
+      240.times do |x|
+        next if @window_masks[x][n] == 0
+
+        tex_x = (ref_x + pa * x) >> 8
+        tex_y = (ref_y + pc * x) >> 8
+        if bgncnt[13] == 1 # wraparound
+          tex_x &= size - 1
+          tex_y &= size - 1
+        elsif tex_x < 0 || tex_x >= size || tex_y < 0 || tex_y >= size
+          next
+        end
+
+        tile = @vram[(map_base + (tex_y >> 3) * (size >> 3) + (tex_x >> 3)) & 0xFFFF] # the map address wraps at 64 KB
+        color = @vram[char_base + (tile << 6) + ((tex_y & 7) << 3) + (tex_x & 7)]
+        next if color == 0
+
+        @second_layers[x] = @top_layers[x]
+        @top_layers[x] = n
+        @second_colors[x] = @buffer[y * 240 + x]
+        @buffer[y * 240 + x] = @palram[color << 1] | (@palram[(color << 1) + 1] << 8)
+      end
+    end
+
+    # As a line starts, BG2 and BG3 take their reference points from BGnX and BGnY if it is line 0
+    # or if those were written during the line before (NanoBoyAdvance background.cc InitBackground)
+    def load_affine_refs
+      2.times do |i|
+        2.times do |axis| # X and Y each, so the other keeps what PB or PD added (NanoBoyAdvance background.cc)
+          next unless vcount == 0 || @affine_written[i][axis]
+
+          @affine_refs[i][axis] = affine_point(0x28 + i * 0x10 + axis * 4)
+          @affine_written[i][axis] = false
+        end
+      end
+    end
+
+    # After each line the reference points move by PB and PD, only while that BG is on: BG2 in modes 1-5,
+    # BG3 in mode 2 (NanoBoyAdvance background.cc, which says this was checked on hardware)
+    def advance_affine_refs
+      dispcnt = read_io16(0)
+      mode = dispcnt & 0x7
+      2.times do |i|
+        next unless dispcnt[10 + i] == 1 && (i == 0 ? mode.between?(1, 5) : mode == 2)
+
+        @affine_refs[i][0] += signed16(read_io16(0x22 + i * 0x10))
+        @affine_refs[i][1] += signed16(read_io16(0x26 + i * 0x10))
+      end
+    end
+
+    # BGnX and BGnY: 28-bit signed, 8 bits of them a fraction
+    def affine_point(offset)
+      value = (read_io16(offset) | (read_io16(offset + 2) << 16)) & 0x0FFF_FFFF
+      value[27] == 1 ? value - 0x1000_0000 : value
+    end
+
+    def signed16(value) = value[15] == 1 ? value - 0x10000 : value
+
     def draw_bg(n, y)
       bgncnt = read_io16(8 + n * 2)
       size = bgncnt >> 14 # 0: 256×256, 1: 512×256, 2: 256×512, 3: 512×512
@@ -287,16 +369,32 @@ module RubyboyAdvance
 
       objs.each do |obj|
         width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
+        box_width, box_height = obj[:double] == 1 ? [width * 2, height * 2] : [width, height]
         bank = obj[:color256] == 0 ? obj[:bank] : 0
 
-        row = (y - obj[:y]) & 0xFF
+        row = (y - obj[:y]) & 0xFF # the line within the box
 
-        tex_y = obj[:rotate] == 0 && obj[:yflip] == 1 ? height - 1 - row : row
-        width.times do |x|
+        if obj[:rotate] == 1
+          pa, pb, pc, pd = obj_affine_matrix(obj[:matrix])
+          # Where the left end of this line of the box looks in the OBJ, in 1/256 pixels: the box center
+          # looks at the OBJ center (NanoBoyAdvance sprite.cc)
+          left_x = pb * (row - box_height / 2) - pa * (box_width / 2) + (width << 7)
+          left_y = pd * (row - box_height / 2) - pc * (box_width / 2) + (height << 7)
+        else
+          tex_y = obj[:yflip] == 1 ? height - 1 - row : row
+        end
+        box_width.times do |x|
           screen_x = (obj[:x] + x) & 0x1FF
           next if screen_x >= 240
 
-          tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
+          if obj[:rotate] == 1
+            tex_x = (left_x + pa * x) >> 8
+            tex_y = (left_y + pc * x) >> 8
+            # Outside the OBJ is not even a clear pixel, so it leaves the priority alone
+            next if tex_x < 0 || tex_x >= width || tex_y < 0 || tex_y >= height
+          else
+            tex_x = obj[:xflip] == 1 ? width - 1 - x : x
+          end
 
           index = y * 240 + screen_x
           in_front = obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
@@ -341,6 +439,14 @@ module RubyboyAdvance
       [obj_colors, obj_priorities, obj_alphas, obj_window]
     end
 
+    # Each group of OBJ affine parameters sits in attr3 of four OBJs in a row: PA, PB, PC and PD
+    def obj_affine_matrix(group)
+      4.times.map do |i|
+        addr = group * 32 + 6 + i * 8
+        signed16(@oam[addr] | (@oam[addr + 1] << 8))
+      end
+    end
+
     def read_objs(y)
       128.times.filter_map do |i|
         base = i * 8
@@ -356,14 +462,16 @@ module RubyboyAdvance
         obj_y = @oam[base]
 
         _, height = OBJ_SIZES[shape][size]
-
-        row = (y - obj_y) & 0xFF
-        next if row >= height
+        double = rotate & invisible # attr0 bit 9 doubles the box of a rotating OBJ instead of hiding it
+        y_max = (obj_y + (height << double)) & 0xFF
+        # A box running past line 255 shows only from line 0 (NanoBoyAdvance sprite.cc)
+        next unless (y >= obj_y || y_max < obj_y) && y < y_max
 
         {
           y: obj_y,
           rotate:,
-          invisible:,
+          double:,
+          matrix: (@oam[base + 3] >> 1) & 0x1F, # attr1 bits 9-13, for a rotating OBJ
           mode: (@oam[base + 1] >> 2) & 0b11,
           color256: @oam[base + 1][5],
           shape:,
