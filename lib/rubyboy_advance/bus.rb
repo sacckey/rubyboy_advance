@@ -14,6 +14,9 @@ module RubyboyAdvance
       @ioram = Array.new(0x400, 0)
       @rom = rom
       @cartram = cartram
+      @eeprom = cartram.is_a?(Eeprom)
+      # NanoBoyAdvance rom.hh
+      @eeprom_mask = rom.size > 0x0100_0000 ? 0x01FF_FF00 : 0x0100_0000
       @ppu = ppu
       @interrupt = interrupt
       @bios = bios
@@ -58,6 +61,8 @@ module RubyboyAdvance
     end
 
     def read16(addr)
+      return @cartram.read_bit if eeprom?(addr)
+
       case addr >> 24
       when 0x0E, 0x0F then read(addr) * 0x0101
       else
@@ -67,6 +72,8 @@ module RubyboyAdvance
     end
 
     def write16(addr, value)
+      return @cartram.write_bit(value) if eeprom?(addr)
+
       case addr >> 24
       when 0x0E, 0x0F then write8(addr, (value >> ((addr & 1) << 3)) & 0xFF)
       else
@@ -100,7 +107,16 @@ module RubyboyAdvance
       @dma.trigger(timing, self)
     end
 
+    def hint_eeprom_size(count)
+      @cartram.hint_size(count) if @eeprom
+    end
+
     private
+
+    # ponytail: 16-bit accesses only
+    def eeprom?(addr)
+      @eeprom && (addr >> 24).between?(0x08, 0x0D) && (addr & @eeprom_mask) == @eeprom_mask
+    end
 
     def write8(addr, value)
       case addr >> 24

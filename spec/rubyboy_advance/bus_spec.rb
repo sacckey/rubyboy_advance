@@ -159,6 +159,52 @@ RSpec.describe RubyboyAdvance::Bus do
     end
   end
 
+  describe 'EEPROM' do
+    def bus_with(rom, cartram)
+      described_class.new(
+        rom, [], RubyboyAdvance::Ppu.new(interrupt), cartram, interrupt,
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+      )
+    end
+
+    let(:rom) { Array.new(4, 0xAB) }
+
+    it 'takes the 16-bit accesses in the ROM area with address bit 24 set' do
+      bus = bus_with(rom, RubyboyAdvance::Eeprom.new)
+
+      expect([0x0900_0000, 0x0B00_0000, 0x0D00_0000].map { bus.read16(it) }).to eq([1, 1, 1])
+      expect([bus.read16(0x0800_0000), bus.read16(0x0C00_0000), bus.read(0x0D00_0000)]).to eq([0xABAB, 0xABAB, 0])
+    end
+
+    it 'leaves the other areas with address bit 24 set alone' do
+      bus = bus_with(rom, RubyboyAdvance::Eeprom.new)
+
+      bus.write16(0x0300_0000, 0x5555)
+
+      expect(bus.read16(0x0300_0000)).to eq(0x5555)
+    end
+
+    it 'reads two bits for a 32-bit access' do
+      bus = bus_with(rom, RubyboyAdvance::Eeprom.new)
+
+      expect(bus.read32(0x0D00_0000)).to eq(0x0001_0001)
+    end
+
+    it 'takes only the last 256 bytes of 0x0D000000 when the ROM is over 16 MB' do
+      big_rom = double(size: 0x0100_0001)
+      allow(big_rom).to receive(:[]).and_return(0xAB)
+      bus = bus_with(big_rom, RubyboyAdvance::Eeprom.new)
+
+      expect([bus.read16(0x0DFF_FEFE), bus.read16(0x0DFF_FF00)]).to eq([0xABAB, 1])
+    end
+
+    it 'leaves 0x0D000000 to the ROM on other cartridges' do
+      bus = bus_with(rom, RubyboyAdvance::Sram.new)
+
+      expect(bus.read16(0x0D00_0000)).to eq(0)
+    end
+  end
+
   describe 'interrupt registers' do
     it 'reads back IE and IME' do
       bus.write16(0x0400_0200, 0x2001)

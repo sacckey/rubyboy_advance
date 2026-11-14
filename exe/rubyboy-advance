@@ -11,6 +11,7 @@ abort 'BIOS_PATH must be a 16 KB GBA BIOS dump' unless bios.size == 0x4000
 rom = File.binread(ARGV[1]).bytes
 cartram =
   case rom.pack('C*')
+  when /EEPROM_V/ then RubyboyAdvance::Eeprom.new
   when /FLASH1M_V/ then RubyboyAdvance::Flash128.new
   when /FLASH\w*_V/ then RubyboyAdvance::Flash.new
   else RubyboyAdvance::Sram.new

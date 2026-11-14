@@ -36,6 +36,7 @@ module RubyboyAdvance
       @sads[channel_index] = dma & SAD_MASKS[channel_index]
       @dads[channel_index] = (dma >> 32) & DAD_MASKS[channel_index]
       @counts[channel_index] = count(dma, channel_index)
+      bus.hint_eeprom_size(@counts[channel_index]) if @dads[channel_index] >= 0x0D00_0000
       transfer(channel_index, bus) if (dma >> 92) & 0b11 == 0 # cnt_h bits 12-13: start timing
     end
 
