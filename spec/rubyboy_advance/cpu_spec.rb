@@ -175,14 +175,34 @@ RSpec.describe RubyboyAdvance::Cpu do
     let(:nop) { [0x00, 0x00, 0xA0, 0xE1] } # mov r0, r0
     let(:rom) { nop * 4 }
 
-    it 'takes three opcode reads after a jump and one for each instruction after it' do
-      expect([cpu.exec, cpu.exec]).to eq([8 * 3, 8])
+    it 'takes three opcode reads after a jump, the first at the full cost, and one for each instruction after it' do
+      expect([cpu.exec, cpu.exec]).to eq([8 + 6 + 6, 6])
     end
 
     it 'reads Thumb opcodes as halfwords' do
       cpu.instance_variable_set(:@cpsr, 0x3F)
 
-      expect([cpu.exec, cpu.exec]).to eq([5 * 3, 5])
+      expect([cpu.exec, cpu.exec]).to eq([5 + 3 + 3, 3])
+    end
+
+    context 'with a load in the ROM' do
+      let(:rom) { [0x00, 0x00, 0x91, 0xE5] + (nop * 5) } # ldr r0, [r1]
+
+      it 'reads the opcode after a data access at the full cost' do
+        regs[1] = 0x0300_0000
+
+        expect([cpu.exec, cpu.exec, cpu.exec]).to eq([8 + 6 + 6 + 1, 8, 6])
+      end
+    end
+
+    context 'with ldm in the ROM' do
+      let(:rom) { [0x0C, 0x00, 0x91, 0xE8] + (nop * 5) } # ldmia r1, {r2, r3}
+
+      it 'reads the words after the first as sequential' do
+        regs[1] = 0x0800_0010
+
+        expect(cpu.exec).to eq(8 + 6 + 6 + 8 + 6)
+      end
     end
 
     it 'adds the data accesses of the instruction' do
