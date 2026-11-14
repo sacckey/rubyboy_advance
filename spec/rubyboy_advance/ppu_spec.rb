@@ -503,7 +503,9 @@ RSpec.describe RubyboyAdvance::Ppu do
         end
 
         it 'ignores bits 12 and 13 on an affine OBJ' do
-          write_obj(0, 0x0100, 0x7000, 1) # affine, 16x16, tile 1; bits 12 and 13 belong to the affine parameter number
+          bus.write16(0x0700_0306, 0x0100) # affine parameter group 24: PA 1.0
+          bus.write16(0x0700_031E, 0x0100) # PD 1.0
+          write_obj(0, 0x0100, 0x7000, 1) # affine, 16x16, tile 1; bits 9-13 pick affine parameter group 24
 
           step(1232 * 160)
 
@@ -566,6 +568,105 @@ RSpec.describe RubyboyAdvance::Ppu do
           step(1232 * 160)
 
           expect(blocks(2, 2)).to eq([[1, 2], [3, 4]]) # tiles 30, 0 / 62, 32
+        end
+      end
+
+      describe 'rotation and scaling' do
+        # Which texel of the 8x8 OBJ shows at (x, y), or nil for the backdrop
+        def texel(x, y)
+          color = ppu.buffer[y * 240 + x]
+          color == 0x7FFF ? nil : [(color - 1) % 8, (color - 1) / 8]
+        end
+
+        def set_matrix(group, pa, pb, pc, pd)
+          [pa, pb, pc, pd].each_with_index { |value, i| bus.write16(0x0700_0006 + group * 32 + i * 8, value) }
+        end
+
+        before do
+          bus.write16(0x0400_0000, 0x1040) # DISPCNT: mode 0, OBJ on, 1D mapping
+          8.times do |ty| # OBJ tile 2 in 256 colors: texel (tx, ty) has color 1 + tx + 8 * ty
+            4.times { |pair| bus.write16(0x0601_0040 + ty * 8 + pair * 2, (1 + pair * 2 + ty * 8) * 0x0101 + 0x0100) }
+          end
+          (1..64).each { |color| bus.write16(0x0500_0200 + color * 2, color) } # OBJ color c reads as c
+        end
+
+        it 'draws an OBJ with attr0 bit 8 as it is when PA and PD are 1.0' do
+          set_matrix(0, 0x0100, 0, 0, 0x0100)
+          write_obj(0, 0x2100, 0, 2) # affine, 256 colors, 8x8, group 0, tile 2
+
+          step(1232 * 160)
+
+          expect([texel(0, 0), texel(7, 0), texel(3, 5), texel(8, 0)]).to eq([[0, 0], [7, 0], [3, 5], nil])
+        end
+
+        it 'takes PA-PD of the group in attr1 bits 9-13 from attr3 of OBJs 4g to 4g + 3' do
+          set_matrix(5, 0x0080, 0, 0, 0x0080) # group 5: 0.5, so twice as large around the center
+          write_obj(0, 0x2100, 5 << 9, 2) # affine, 256 colors, 8x8, group 5, tile 2
+
+          step(1232 * 160)
+
+          expect([texel(0, 0), texel(1, 1), texel(2, 2), texel(7, 7)]).to eq([[2, 2], [2, 2], [3, 3], [5, 5]])
+        end
+
+        it 'doubles the box with attr0 bit 9, so the OBJ can grow into it' do
+          set_matrix(0, 0x0080, 0, 0, 0x0080)
+          write_obj(0, 0x2300, 0, 2) # affine, double size, 256 colors, 8x8, group 0, tile 2
+
+          step(1232 * 160)
+
+          expect([texel(0, 0), texel(15, 15), texel(16, 0), texel(0, 16)]).to eq([[0, 0], [7, 7], nil, nil])
+        end
+
+        it 'puts the OBJ at the center of a doubled box' do
+          bus.write32(0x0601_0080, 0x0101_0101) # tile 4, next to the OBJ's tile in 1D mapping, must not show
+          set_matrix(0, 0x0100, 0, 0, 0x0100)
+          write_obj(0, 0x2300, 0, 2) # affine, double size, 256 colors, 8x8, group 0, tile 2
+
+          step(1232 * 160)
+
+          expect([texel(3, 4), texel(4, 4), texel(11, 11), texel(12, 4), texel(4, 3)]).to eq([nil, [0, 0], [7, 7], nil, nil])
+        end
+
+        it 'mirrors the OBJ with a negative PA' do
+          set_matrix(0, 0xFF00, 0, 0, 0x0100) # PA: -1.0
+          write_obj(0, 0x2100, 0, 2)
+
+          step(1232 * 160)
+
+          expect([texel(0, 0), texel(1, 0), texel(7, 0)]).to eq([nil, [7, 0], [1, 0]]) # tex_x = 8 - x
+        end
+
+        it 'turns the OBJ with PB and PC' do
+          set_matrix(0, 0, 0xFF00, 0x0100, 0) # a quarter turn: tex = (8 - y, x)
+          write_obj(0, 0x2100, 0, 2)
+
+          step(1232 * 160)
+
+          expect([texel(0, 1), texel(5, 3), texel(5, 0)]).to eq([[7, 0], [5, 5], nil])
+        end
+
+        it 'leaves the priority alone outside the OBJ, though a clear pixel inside it lifts the priority as usual' do
+          bus.write16(0x0400_0000, 0x1140) # DISPCNT: mode 0, BG0 and OBJ on, 1D mapping
+          bus.write16(0x0400_0008, 0x0004) # BG0CNT: priority 0, tiles at 0x06004000, map at 0x06000000 (every entry tile 0)
+          8.times { |row| bus.write32(0x0600_4000 + row * 4, 0x1111_1111) } # BG tile 0: all color 1
+          bus.write16(0x0500_0002, 0x4444) # BG bank 0 color 1
+          set_matrix(0, 0x0100, 0, 0, 0x0100)
+          write_obj(0, 0, 0, 1 | (1 << 10)) # 8x8 tile 1 at priority 1, behind BG0
+          write_obj(1, 0x0300, 0, 4) # affine, double size, 8x8 at priority 0, tile 4, which is clear
+
+          step(1232 * 160)
+
+          expect([0, 3, 4, 7].map { |x| ppu.buffer[4 * 240 + x] }).to eq([0x4444, 0x4444, 1, 1]) # OBJ 1 covers x 4-11
+        end
+
+        it 'shows a box running past line 255 only from line 0' do
+          (64 * 8).times { |i| bus.write32(0x0601_0000 + i * 4, 0x1111_1111) } # OBJ tiles 0-63: all color 1
+          set_matrix(0, 0x0080, 0, 0, 0x0080)
+          write_obj(0, 0x0300 | 140, 0xC000, 0) # affine, double size, y 140, 64x64, tile 0: a 128-line box
+
+          step(1232 * 160)
+
+          expect([0, 11, 12, 139, 140, 159].map { |y| ppu.buffer[y * 240] }).to eq([1, 1, 0x7FFF, 0x7FFF, 0x7FFF, 0x7FFF])
         end
       end
     end

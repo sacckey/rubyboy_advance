@@ -367,16 +367,32 @@ module RubyboyAdvance
 
       objs.each do |obj|
         width, height = OBJ_SIZES[obj[:shape]][obj[:size]]
+        box_width, box_height = obj[:double] == 1 ? [width * 2, height * 2] : [width, height]
         bank = obj[:color256] == 0 ? obj[:bank] : 0
 
-        row = (y - obj[:y]) & 0xFF
+        row = (y - obj[:y]) & 0xFF # the line within the box
 
-        tex_y = obj[:rotate] == 0 && obj[:yflip] == 1 ? height - 1 - row : row
-        width.times do |x|
+        if obj[:rotate] == 1
+          pa, pb, pc, pd = obj_affine_matrix(obj[:matrix])
+          # Where the left end of this line of the box looks in the OBJ, in 1/256 pixels: the box center
+          # looks at the OBJ center (NanoBoyAdvance sprite.cc)
+          left_x = pb * (row - box_height / 2) - pa * (box_width / 2) + (width << 7)
+          left_y = pd * (row - box_height / 2) - pc * (box_width / 2) + (height << 7)
+        else
+          tex_y = obj[:yflip] == 1 ? height - 1 - row : row
+        end
+        box_width.times do |x|
           screen_x = (obj[:x] + x) & 0x1FF
           next if screen_x >= 240
 
-          tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
+          if obj[:rotate] == 1
+            tex_x = (left_x + pa * x) >> 8
+            tex_y = (left_y + pc * x) >> 8
+            # Outside the OBJ is not even a clear pixel, so it leaves the priority alone
+            next if tex_x < 0 || tex_x >= width || tex_y < 0 || tex_y >= height
+          else
+            tex_x = obj[:xflip] == 1 ? width - 1 - x : x
+          end
 
           index = y * 240 + screen_x
           in_front = obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
@@ -421,6 +437,14 @@ module RubyboyAdvance
       [obj_colors, obj_priorities, obj_alphas, obj_window]
     end
 
+    # Each group of OBJ affine parameters sits in attr3 of four OBJs in a row: PA, PB, PC and PD
+    def obj_affine_matrix(group)
+      4.times.map do |i|
+        addr = group * 32 + 6 + i * 8
+        signed16(@oam[addr] | (@oam[addr + 1] << 8))
+      end
+    end
+
     def read_objs(y)
       128.times.filter_map do |i|
         base = i * 8
@@ -436,14 +460,16 @@ module RubyboyAdvance
         obj_y = @oam[base]
 
         _, height = OBJ_SIZES[shape][size]
-
-        row = (y - obj_y) & 0xFF
-        next if row >= height
+        double = rotate & invisible # attr0 bit 9 doubles the box of a rotating OBJ instead of hiding it
+        y_max = (obj_y + (height << double)) & 0xFF
+        # A box running past line 255 shows only from line 0 (NanoBoyAdvance sprite.cc)
+        next unless (y >= obj_y || y_max < obj_y) && y < y_max
 
         {
           y: obj_y,
           rotate:,
-          invisible:,
+          double:,
+          matrix: (@oam[base + 3] >> 1) & 0x1F, # attr1 bits 9-13, for a rotating OBJ
           mode: (@oam[base + 1] >> 2) & 0b11,
           color256: @oam[base + 1][5],
           shape:,
