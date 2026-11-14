@@ -39,7 +39,7 @@ module RubyboyAdvance
 
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
-      self.pc &= flag_t ? ~1 : ~3
+      @regs[15] &= flag_t ? ~1 : ~3
 
       if @interrupt.irq? && @cpsr[7] == 0
         @spsrs[:irq] = @cpsr
@@ -53,8 +53,8 @@ module RubyboyAdvance
       address = pc
 
       if flag_t
-        opcode = @bus.read16(address)
-        self.pc += 2
+        opcode = fetch(address, 2)
+        @regs[15] += 2
 
         case opcode >> 12
         when 0x0, 0x1
@@ -348,8 +348,8 @@ module RubyboyAdvance
         return 1
       end
 
-      opcode = @bus.read32(address)
-      self.pc += 4
+      opcode = fetch(address, 4)
+      @regs[15] += 4
       return 1 unless executable?(opcode >> 28)
 
       instruction = determine_instruction(opcode)
@@ -640,6 +640,23 @@ module RubyboyAdvance
 
     private
 
+    # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
+    # ponytail: loads and ALU writes to r15 refill it only when they go elsewhere
+    def fetch(address, size)
+      if address == @next_address
+        opcode = @next_opcode
+        @next_opcode = @after_next_opcode
+      else
+        opcode = read_opcode(address, size)
+        @next_opcode = read_opcode(address + size, size)
+      end
+      @after_next_opcode = read_opcode(address + (size * 2), size)
+      @next_address = address + size
+      opcode
+    end
+
+    def read_opcode(address, size) = size == 2 ? @bus.read16(address) : @bus.read32(address)
+
     def swi
       @spsrs[:svc] = @cpsr
       update_banked_regs(:svc)
@@ -726,8 +743,10 @@ module RubyboyAdvance
       @regs[15]
     end
 
+    # Branches, BX and exceptions refill the pipeline
     def pc=(value)
       @regs[15] = value
+      @next_address = nil
     end
 
     # Reads a register as an instruction operand. pc already points past the
