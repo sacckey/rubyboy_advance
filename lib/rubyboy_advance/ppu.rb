@@ -40,10 +40,10 @@ module RubyboyAdvance
               @top_layers.fill(5)
               @second_layers.fill(5)
               @second_colors.fill(background)
-              set_window_masks
               bgs = (0..3).select { |n| dispcnt[8 + n] == 1 }
               bgs_by_priority = bgs.group_by { |n| read_io16(8 + n * 2) & 0b11 }
-              obj_colors, obj_priorities, obj_alphas = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}, {}]
+              obj_colors, obj_priorities, obj_alphas, obj_window = dispcnt[12] == 1 ? render_objs(read_objs(vcount), vcount) : [{}, {}, {}, {}]
+              update_window_masks(obj_window)
               3.downto(0) do |priority|
                 (bgs_by_priority[priority] || []).sort.reverse.each do |n|
                   draw_bg(n, vcount)
@@ -179,9 +179,9 @@ module RubyboyAdvance
 
     private
 
-    def set_window_masks
+    def update_window_masks(obj_window)
       dispcnt = read_io16(0)
-      if dispcnt & 0xE000 == 0
+      if dispcnt[13] == 0 && dispcnt[14] == 0 && (dispcnt[15] == 0 || dispcnt[12] == 0)
         @window_masks.fill(0x3F)
         return
       end
@@ -191,6 +191,8 @@ module RubyboyAdvance
                              @io[0x48] & 0b111111
                            elsif dispcnt[14] == 1 && in_window?(x, vcount, 1)
                              @io[0x49] & 0b111111
+                           elsif dispcnt[15] == 1 && obj_window[vcount * 240 + x]
+                             @io[0x4B] & 0b111111
                            else
                              @io[0x4A] & 0b111111
                            end
@@ -254,6 +256,7 @@ module RubyboyAdvance
     def draw_objs(obj_colors, obj_priorities, priority)
       obj_colors.each do |index, color|
         next unless obj_priorities[index] == priority
+        next if @window_masks[index % 240][4] == 0
 
         x = index % 240
         @second_layers[x] = @top_layers[x]
@@ -272,6 +275,7 @@ module RubyboyAdvance
       obj_colors = {}
       obj_priorities = {}
       obj_alphas = {}
+      obj_window = {}
       is_1d = read_io16(0)[6] == 1
 
       objs.each do |obj|
@@ -284,12 +288,11 @@ module RubyboyAdvance
         width.times do |x|
           screen_x = (obj[:x] + x) & 0x1FF
           next if screen_x >= 240
-          next if @window_masks[screen_x][4] == 0
 
           tex_x = obj[:rotate] == 0 && obj[:xflip] == 1 ? width - 1 - x : x
 
           index = y * 240 + screen_x
-          next unless obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
+          next unless obj[:mode] == 2 || obj_colors[index].nil? || obj[:priority] < obj_priorities[index]
 
           if obj[:color256] == 0
             tile_number = if is_1d
@@ -310,6 +313,10 @@ module RubyboyAdvance
             # Tile 1023 runs past the end of VRAM, so the address wraps within the OBJ tiles (mGBA software-obj.c)
             color = @vram[0x10000 + (((tile_number << 5) + ((tex_y & 7) << 3) + (tex_x & 7)) & 0x7FFF)]
           end
+          if obj[:mode] == 2
+            obj_window[index] = true if color != 0
+            next
+          end
           obj_priorities[index] = obj[:priority]
           next if color == 0
 
@@ -319,7 +326,7 @@ module RubyboyAdvance
         end
       end
 
-      [obj_colors, obj_priorities, obj_alphas]
+      [obj_colors, obj_priorities, obj_alphas, obj_window]
     end
 
     def read_objs(y)

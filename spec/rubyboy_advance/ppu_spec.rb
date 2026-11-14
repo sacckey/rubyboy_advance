@@ -723,10 +723,10 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_0044 + n * 2, (y1 << 8) | y2) # WINnV
       end
 
-      def show_obj(index, x, attr0: 0)
+      def show_obj(index, x, attr0: 0, tile: 1, priority: 0)
         bus.write16(0x0700_0000 + index * 8, attr0) # y 0, 8x8
         bus.write16(0x0700_0002 + index * 8, x)
-        bus.write16(0x0700_0004 + index * 8, 1) # tile 1, priority 0
+        bus.write16(0x0700_0004 + index * 8, tile | (priority << 10))
       end
 
       let(:backdrop) { rgb(2, 4, 6) }
@@ -741,6 +741,7 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write32(0x0600_4000 + row * 4, 0x1111_1111) # BG0 tile 0: all color 1
           bus.write32(0x0600_8000 + row * 4, 0x2222_2222) # BG1 tile 0: all color 2
           bus.write32(0x0601_0020 + row * 4, 0x1111_1111) # OBJ tile 1: all color 1
+          bus.write32(0x0601_0040 + row * 4, 0x0000_1111) # OBJ tile 2: x 0-3 color 1, x 4-7 clear
         end
         128.times { |index| bus.write16(0x0700_0000 + index * 8, 0x0200) } # every OBJ hidden
         bus.write16(0x0500_0000, backdrop)
@@ -847,6 +848,75 @@ RSpec.describe RubyboyAdvance::Ppu do
         step(1232 * 160)
 
         expect(pixel(100, 0)).to eq(rgb(15, 18, 14))
+      end
+
+      describe 'OBJ window' do
+        let(:window_obj) { 0x0800 } # attr0 bits 10-11: 2
+
+        it 'uses WINOUT bits 8-13 where an OBJ in mode 2 has a pixel' do
+          bus.write16(0x0400_0000, 0x9300) # DISPCNT: BG0, BG1, OBJ, OBJ window
+          bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+          show_obj(0, 0, attr0: window_obj | 20, tile: 2) # lines 20-27; pixels at x 0-3, clear at x 4-7
+
+          step(1232 * 160)
+
+          expect([pixel(0, 20), pixel(3, 20), pixel(4, 20), pixel(7, 20), pixel(8, 20)]).to eq([bg0, bg0, bg1, bg1, bg1])
+          expect([pixel(0, 19), pixel(0, 28)]).to eq([bg1, bg1])
+        end
+
+        it 'never draws an OBJ in mode 2, even with no window on' do
+          bus.write16(0x0400_0000, 0x1300) # DISPCNT: BG0, BG1, OBJ
+          show_obj(0, 0, attr0: window_obj)
+
+          step(1232 * 160)
+
+          expect(pixel(0, 0)).to eq(bg0)
+        end
+
+        it 'counts as no window at all while OBJs are off' do
+          bus.write16(0x0400_0000, 0x8300) # DISPCNT: BG0, BG1, OBJ window, but no OBJ
+          bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+          show_obj(0, 0, attr0: window_obj)
+
+          step(1232 * 160)
+
+          expect([pixel(0, 0), pixel(8, 0)]).to eq([bg0, bg0])
+        end
+
+        it 'is left out while DISPCNT bit 15 is off' do
+          bus.write16(0x0400_0000, 0x3300) # DISPCNT: BG0, BG1, OBJ, WIN0, whose registers are 0 and so empty
+          bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+          show_obj(0, 0, attr0: window_obj)
+
+          step(1232 * 160)
+
+          expect(pixel(0, 0)).to eq(bg1)
+        end
+
+        [[0xB300, 0, 'WIN0'], [0xD300, 1, 'WIN1']].each do |dispcnt, n, window|
+          it "comes after #{window}" do
+            bus.write16(0x0400_0000, dispcnt) # BG0, BG1, OBJ, OBJ window and the window
+            set_window(n, 2, 4, 0, 160)
+            bus.write16(0x0400_0048, 0x0000) # WININ: nothing in WIN0 or WIN1
+            bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+            show_obj(0, 0, attr0: window_obj, tile: 2) # pixels at x 0-3
+
+            step(1232 * 160)
+
+            expect([pixel(0, 0), pixel(3, 0), pixel(4, 0)]).to eq([bg0, backdrop, bg1])
+          end
+        end
+
+        it 'takes the pixels of an OBJ in mode 2 whatever OBJ is in front of it' do
+          bus.write16(0x0400_0000, 0x9300) # DISPCNT: BG0, BG1, OBJ, OBJ window
+          bus.write16(0x0400_004A, 0x0112) # WINOUT: BG1 and OBJ outside, BG0 in the OBJ window
+          show_obj(0, 0) # a normal OBJ at priority 0
+          show_obj(1, 0, attr0: window_obj, tile: 2, priority: 3) # pixels at x 0-3
+
+          step(1232 * 160)
+
+          expect([pixel(0, 0), pixel(4, 0), pixel(8, 0)]).to eq([bg0, obj, bg1])
+        end
       end
     end
   end
