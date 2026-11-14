@@ -202,16 +202,63 @@ RSpec.describe RubyboyAdvance::Cpu do
       expect(regs[4]).to eq(9)
     end
 
-    it 'runs the two Thumb instructions it has read even when the ones before rewrite them' do
-      [0x8008, 0x8010, 0x2301, 0x2402].each_with_index { |opcode, i| bus.write16(base + (i * 2), opcode) } # strh r0, [r1]; strh r0, [r2]; mov r3, #1; mov r4, #2
-      regs[1] = base + 4
-      regs[2] = base + 6
-      regs[15] = base
-      cpu.instance_variable_set(:@cpsr, 0x3F)
+    { 'mov pc, r2' => 0xE1A0F002, 'ldr pc, [r3]' => 0xE593F000, 'ldmia r3, {pc}' => 0xE8938000 }.each do |name, jump|
+      it "reads again after #{name}, even to the next instruction" do
+        bus.write32(0x0300_0100, base + 8)
+        regs[1] = base + 8
+        regs[2] = base + 8
+        regs[3] = 0x0300_0100
+        regs[5] = 0xE3A04009 # mov r4, #9
 
-      4.times { cpu.exec }
+        run_arm(0xE5815000, jump, 0xE3A04002) # str r5, [r1]; the jump; mov r4, #2
 
-      expect([regs[3], regs[4]]).to eq([1, 2])
+        expect(regs[4]).to eq(9)
+      end
+    end
+
+    it 'reads Thumb instructions again after movs pc returns to Thumb at the next address' do
+      bus.write16(base + 4, 0x2409) # mov r4, #9
+      bus.write16(base + 6, 0x2502) # mov r5, #2
+      cpu.instance_variable_set(:@cpsr, 0x13) # SVC
+      cpu.instance_variable_get(:@spsrs)[:svc] = 0x3F # System, Thumb
+      regs[0] = base + 4
+
+      run_arm(0xE1B0F000) # movs pc, r0
+      2.times { cpu.exec }
+
+      expect([regs[4], regs[5]]).to eq([9, 2])
+    end
+
+    describe 'in Thumb' do
+      def run_thumb(*opcodes)
+        opcodes.each_with_index { |opcode, i| bus.write16(base + (i * 2), opcode) }
+        regs[15] = base
+        cpu.instance_variable_set(:@cpsr, 0x3F)
+        opcodes.size.times { cpu.exec }
+      end
+
+      it 'runs the two instructions it has read even when the ones before rewrite them' do
+        regs[1] = base + 4
+        regs[2] = base + 6
+
+        run_thumb(0x8008, 0x8010, 0x2301, 0x2402) # strh r0, [r1]; strh r0, [r2]; mov r3, #1; mov r4, #2
+
+        expect([regs[3], regs[4]]).to eq([1, 2])
+      end
+
+      { 'mov pc, r2' => 0x4697, 'pop {pc}' => 0xBD00 }.each do |name, jump|
+        it "reads again after #{name}, even to the next instruction" do
+          regs[1] = base + 4
+          regs[2] = base + 4
+          regs[5] = 0x2409 # mov r4, #9
+          regs[13] = 0x0300_0100
+          bus.write32(0x0300_0100, base + 4)
+
+          run_thumb(0x800D, jump, 0x2402) # strh r5, [r1]; the jump; mov r4, #2
+
+          expect(regs[4]).to eq(9)
+        end
+      end
     end
   end
 end
