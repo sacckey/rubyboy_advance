@@ -713,6 +713,261 @@ RSpec.describe RubyboyAdvance::Ppu do
         end
       end
     end
+
+    describe 'windows' do
+      def rgb(red, green, blue) = red | (green << 5) | (blue << 10)
+      def pixel(x, y) = ppu.buffer[y * 240 + x]
+
+      # A window turns on only as a line starts at its Y1, so the first frame misses it above Y1
+      def draw_second_frame = step(1232 * 228 + 1232 * 160)
+
+      def set_window(n, x1, x2, y1, y2)
+        bus.write16(0x0400_0040 + n * 2, (x1 << 8) | x2) # WINnH
+        bus.write16(0x0400_0044 + n * 2, (y1 << 8) | y2) # WINnV
+      end
+
+      def show_obj(index, x, attr0: 0, tile: 1, priority: 0)
+        bus.write16(0x0700_0000 + index * 8, attr0) # y 0, 8x8
+        bus.write16(0x0700_0002 + index * 8, x)
+        bus.write16(0x0700_0004 + index * 8, tile | (priority << 10))
+      end
+
+      let(:backdrop) { rgb(2, 4, 6) }
+      let(:bg0) { rgb(8, 16, 24) }
+      let(:bg1) { rgb(31, 0, 16) }
+      let(:obj) { rgb(0, 24, 8) }
+
+      before do
+        bus.write16(0x0400_0008, 0x0004) # BG0CNT: priority 0, tiles at 0x06004000, map at 0x06000000 (every entry tile 0)
+        bus.write16(0x0400_000A, 0x0009) # BG1CNT: priority 1, tiles at 0x06008000, the same map
+        8.times do |row|
+          bus.write32(0x0600_4000 + row * 4, 0x1111_1111) # BG0 tile 0: all color 1
+          bus.write32(0x0600_8000 + row * 4, 0x2222_2222) # BG1 tile 0: all color 2
+          bus.write32(0x0601_0020 + row * 4, 0x1111_1111) # OBJ tile 1: all color 1
+          bus.write32(0x0601_0040 + row * 4, 0x0000_1111) # OBJ tile 2: x 0-3 color 1, x 4-7 clear
+        end
+        128.times { |index| bus.write16(0x0700_0000 + index * 8, 0x0200) } # every OBJ hidden
+        bus.write16(0x0500_0000, backdrop)
+        bus.write16(0x0500_0002, bg0) # BG bank 0 color 1
+        bus.write16(0x0500_0004, bg1) # BG bank 0 color 2
+        bus.write16(0x0500_0202, obj) # OBJ bank 0 color 1
+      end
+
+      it 'shows the layers in WININ bits 0-5 inside WIN0 and those in WINOUT bits 0-5 outside, X2 and Y2 not included' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 40, 80, 20, 60)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        draw_second_frame
+
+        expect([pixel(39, 30), pixel(40, 30), pixel(79, 30), pixel(80, 30)]).to eq([bg0, bg1, bg1, bg0])
+        expect([pixel(40, 19), pixel(40, 20), pixel(40, 59), pixel(40, 60)]).to eq([bg0, bg1, bg1, bg0])
+      end
+
+      it 'uses WININ bits 8-13 inside WIN1, and WIN0 where both are, and shows the backdrop where nothing is allowed' do
+        bus.write16(0x0400_0000, 0x6300) # DISPCNT: BG0, BG1, WIN0, WIN1
+        set_window(0, 40, 80, 0, 160)
+        set_window(1, 0, 60, 0, 160)
+        bus.write16(0x0400_0048, 0x0302) # WININ: BG1 in WIN0, BG0 and BG1 in WIN1
+        bus.write16(0x0400_004A, 0x0000) # WINOUT: nothing outside
+
+        draw_second_frame
+
+        expect([pixel(0, 0), pixel(39, 0), pixel(40, 0), pixel(79, 0), pixel(80, 0)]).to eq([bg0, bg0, bg1, bg1, backdrop])
+      end
+
+      it 'wraps around the screen edges when X1 > X2 or Y1 > Y2' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 200, 40, 100, 40) # x 200-239 and 0-39, lines 100-159 and 0-39
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        draw_second_frame
+
+        expect([pixel(0, 30), pixel(39, 30), pixel(40, 30), pixel(199, 30), pixel(200, 30)]).to eq([bg1, bg1, bg0, bg0, bg1])
+        expect([pixel(0, 39), pixel(0, 40), pixel(0, 99), pixel(0, 100)]).to eq([bg1, bg0, bg0, bg1])
+      end
+
+      it 'keeps a window on from line Y1 until line Y2, even when Y1 moves in between' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 0, 240, 20, 60)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+        step(1232 * 30 + 1007) # through the HBlank of line 30
+        set_window(0, 0, 240, 40, 60)
+
+        step(1232 * 130)
+
+        expect([pixel(0, 19), pixel(0, 20), pixel(0, 31), pixel(0, 39), pixel(0, 59), pixel(0, 60)]).to eq([bg0, bg1, bg1, bg1, bg1, bg0])
+      end
+
+      it 'turns a window on at a line Y1 in VBlank, for the top of the next frame' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 0, 240, 170, 20)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        draw_second_frame
+
+        expect([pixel(0, 0), pixel(0, 19), pixel(0, 20), pixel(0, 159)]).to eq([bg1, bg1, bg0, bg0])
+      end
+
+      it 'leaves a window off when Y1 equals Y2' do
+        bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+        set_window(0, 0, 240, 50, 50)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+        draw_second_frame
+
+        expect([pixel(0, 0), pixel(0, 50), pixel(0, 100)]).to eq([bg0, bg0, bg0])
+      end
+
+      it 'leaves WINOUT out while no window is on' do
+        bus.write16(0x0400_0000, 0x0300) # DISPCNT: BG0, BG1, no window
+        bus.write16(0x0400_004A, 0x0000) # WINOUT: nothing outside
+
+        draw_second_frame
+
+        expect(pixel(0, 0)).to eq(bg0)
+      end
+
+      [[0x2300, 1, 'WIN1'], [0x4300, 0, 'WIN0']].each do |dispcnt, off, window|
+        it "leaves #{window} out while its DISPCNT bit is off" do
+          bus.write16(0x0400_0000, dispcnt) # BG0, BG1 and the other window, whose registers are 0 and so empty
+          set_window(off, 0, 240, 0, 160) # the whole screen
+          bus.write16(0x0400_0048, 0x0202) # WININ: BG1 in WIN0 and WIN1
+          bus.write16(0x0400_004A, 0x0001) # WINOUT: BG0 outside
+
+          draw_second_frame
+
+          expect(pixel(0, 0)).to eq(bg0)
+        end
+      end
+
+      it 'hides the OBJs where the window does not allow them' do
+        bus.write16(0x0400_0000, 0x3200) # DISPCNT: BG1, OBJ, WIN0
+        set_window(0, 40, 80, 0, 160)
+        bus.write16(0x0400_0048, 0x0002) # WININ: BG1 in WIN0
+        bus.write16(0x0400_004A, 0x0012) # WINOUT: BG1 and OBJ outside
+        show_obj(0, 40)
+        show_obj(1, 100)
+
+        draw_second_frame
+
+        expect([pixel(40, 0), pixel(100, 0)]).to eq([bg1, obj])
+      end
+
+      [[0x00C1, 'darkening', [0, 0, 0]], [0x0241, 'mixing', [21, 12, 26]]].each do |bldcnt, effect, inside|
+        it "allows #{effect} only where the window has bit 5 set" do
+          bus.write16(0x0400_0000, 0x2300) # DISPCNT: BG0, BG1, WIN0
+          set_window(0, 40, 80, 0, 160)
+          bus.write16(0x0400_0048, 0x0023) # WININ: BG0, BG1 and effects in WIN0
+          bus.write16(0x0400_004A, 0x0003) # WINOUT: BG0 and BG1 outside, no effects
+          bus.write16(0x0400_0050, bldcnt) # 1st BG0, effect 3 / 1st BG0, 2nd BG1, effect 1
+          bus.write16(0x0400_0052, 0x080C) # EVA 12, EVB 8
+          bus.write16(0x0400_0054, 16) # EVY 16
+
+          draw_second_frame
+
+          expect([pixel(40, 0), pixel(80, 0)]).to eq([rgb(*inside), bg0])
+        end
+      end
+
+      it 'still mixes a semi-transparent OBJ where the window has bit 5 clear' do
+        bus.write16(0x0400_0000, 0x3200) # DISPCNT: BG1, OBJ, WIN0
+        set_window(0, 200, 201, 0, 160) # away from the OBJ
+        bus.write16(0x0400_004A, 0x0012) # WINOUT: BG1 and OBJ outside, no effects
+        bus.write16(0x0400_0050, 0x02C0) # 2nd BG1, effect 3
+        bus.write16(0x0400_0052, 0x080C) # EVA 12, EVB 8
+        show_obj(0, 100, attr0: 0x0400) # attr0 bits 10-11: 1, semi-transparent
+
+        draw_second_frame
+
+        expect(pixel(100, 0)).to eq(rgb(15, 18, 14))
+      end
+
+      describe 'OBJ window' do
+        let(:window_obj) { 0x0800 } # attr0 bits 10-11: 2
+
+        it 'uses WINOUT bits 8-13 where an OBJ in mode 2 has a pixel' do
+          bus.write16(0x0400_0000, 0x9300) # DISPCNT: BG0, BG1, OBJ, OBJ window
+          bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+          show_obj(0, 0, attr0: window_obj | 20, tile: 2) # lines 20-27; pixels at x 0-3, clear at x 4-7
+
+          draw_second_frame
+
+          expect([pixel(0, 20), pixel(3, 20), pixel(4, 20), pixel(7, 20), pixel(8, 20)]).to eq([bg0, bg0, bg1, bg1, bg1])
+          expect([pixel(0, 19), pixel(0, 28)]).to eq([bg1, bg1])
+        end
+
+        it 'never draws an OBJ in mode 2, even with no window on' do
+          bus.write16(0x0400_0000, 0x1300) # DISPCNT: BG0, BG1, OBJ
+          show_obj(0, 0, attr0: window_obj)
+
+          draw_second_frame
+
+          expect(pixel(0, 0)).to eq(bg0)
+        end
+
+        it 'counts as no window at all while OBJs are off' do
+          bus.write16(0x0400_0000, 0x8300) # DISPCNT: BG0, BG1, OBJ window, but no OBJ
+          bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+          show_obj(0, 0, attr0: window_obj)
+
+          draw_second_frame
+
+          expect([pixel(0, 0), pixel(8, 0)]).to eq([bg0, bg0])
+        end
+
+        it 'is left out while DISPCNT bit 15 is off' do
+          bus.write16(0x0400_0000, 0x3300) # DISPCNT: BG0, BG1, OBJ, WIN0, whose registers are 0 and so empty
+          bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+          show_obj(0, 0, attr0: window_obj)
+
+          draw_second_frame
+
+          expect(pixel(0, 0)).to eq(bg1)
+        end
+
+        [[0xB300, 0, 'WIN0'], [0xD300, 1, 'WIN1']].each do |dispcnt, n, window|
+          it "comes after #{window}" do
+            bus.write16(0x0400_0000, dispcnt) # BG0, BG1, OBJ, OBJ window and the window
+            set_window(n, 2, 4, 0, 160)
+            bus.write16(0x0400_0048, 0x0000) # WININ: nothing in WIN0 or WIN1
+            bus.write16(0x0400_004A, 0x0102) # WINOUT: BG1 outside, BG0 in the OBJ window
+            show_obj(0, 0, attr0: window_obj, tile: 2) # pixels at x 0-3
+
+            draw_second_frame
+
+            expect([pixel(0, 0), pixel(3, 0), pixel(4, 0)]).to eq([bg0, backdrop, bg1])
+          end
+        end
+
+        it 'takes the pixels of an OBJ in mode 2 whatever OBJ is in front of it' do
+          bus.write16(0x0400_0000, 0x9300) # DISPCNT: BG0, BG1, OBJ, OBJ window
+          bus.write16(0x0400_004A, 0x0112) # WINOUT: BG1 and OBJ outside, BG0 in the OBJ window
+          show_obj(0, 0) # a normal OBJ at priority 0
+          show_obj(1, 0, attr0: window_obj, tile: 2, priority: 3) # pixels at x 0-3
+
+          draw_second_frame
+
+          expect([pixel(0, 0), pixel(4, 0), pixel(8, 0)]).to eq([bg0, obj, bg1])
+        end
+
+        it 'lets the clear pixels of an OBJ in mode 2 lift the priority of the OBJ under them, as any OBJ does' do
+          bus.write16(0x0400_0000, 0x9300) # DISPCNT: BG0, BG1, OBJ, OBJ window
+          bus.write16(0x0400_004A, 0x1313) # WINOUT: BG0, BG1 and OBJ both outside and in the OBJ window
+          show_obj(0, 0, priority: 2) # a normal OBJ behind BG0, which has priority 0
+          show_obj(1, 0, attr0: window_obj, tile: 2, priority: 0) # pixels at x 0-3, clear at x 4-7
+
+          draw_second_frame
+
+          expect([pixel(0, 0), pixel(4, 0)]).to eq([bg0, obj])
+        end
+      end
+    end
   end
 
   describe 'lines' do
