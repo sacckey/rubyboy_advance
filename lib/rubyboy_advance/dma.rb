@@ -5,57 +5,68 @@ module RubyboyAdvance
     # Address bits each channel uses: DMA0 cannot read the Game Pak, and only DMA3 can write to it.
     SAD_MASKS = [0x07FF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF].freeze
     DAD_MASKS = [0x07FF_FFFF, 0x07FF_FFFF, 0x07FF_FFFF, 0x0FFF_FFFF].freeze
-    # DMAxCNT_H bits 12-13 and the channels that start then: FIFO A asks DMA1, FIFO B asks DMA2 (NanoBoyAdvance dma.cc)
-    TRIGGERS = { vblank: [1, 0..3], hblank: [2, 0..3], fifo_a: [3, [1]], fifo_b: [3, [2]] }.freeze
 
     # The bus comes in only for the calls that copy, so the DMA does not hold on to it
     def initialize
-      @channels = [0, 0, 0, 0]
+      @io = Array.new(48, 0) # twelve bytes a channel: SAD, DAD, CNT_L, CNT_H
       @sads = [0, 0, 0, 0]
       @dads = [0, 0, 0, 0]
       @counts = [0, 0, 0, 0]
     end
 
     def read(addr)
-      channel_index = (addr - 0x0B0) / 12
-      shift_amount = (addr - 0x0B0) % 12
-
-      (@channels[channel_index] >> (shift_amount * 8)) & 0xFF
+      @io[addr - 0x0B0]
     end
 
     def write(addr, value, bus)
-      channel_index = (addr - 0x0B0) / 12
-      shift_amount = (addr - 0x0B0) % 12
-      before = @channels[channel_index][95]
+      offset = addr - 0x0B0
+      channel_index = offset / 12
+      before = cnt_h(channel_index)[15]
+      @io[offset] = value
 
-      dma = (@channels[channel_index] & ~(0xFF << shift_amount * 8)) | (value << shift_amount * 8)
-      @channels[channel_index] = dma
+      return unless offset % 12 == 11
+      return unless before == 0 && cnt_h(channel_index)[15] == 1
 
-      return unless shift_amount == 11
-      return unless before == 0 && dma[95] == 1
-
-      @sads[channel_index] = dma & SAD_MASKS[channel_index]
-      @dads[channel_index] = (dma >> 32) & DAD_MASKS[channel_index]
-      @counts[channel_index] = count(dma, channel_index)
+      @sads[channel_index] = register(channel_index, 0, 4) & SAD_MASKS[channel_index]
+      @dads[channel_index] = register(channel_index, 4, 4) & DAD_MASKS[channel_index]
+      @counts[channel_index] = count(channel_index)
       bus.hint_eeprom_size(@counts[channel_index]) if @dads[channel_index] >= 0x0D00_0000
-      transfer(channel_index, bus) if (dma >> 92) & 0b11 == 0 # cnt_h bits 12-13: start timing
+      transfer(channel_index, bus) if (cnt_h(channel_index) >> 12) & 0b11 == 0
     end
 
+    # Start timings are DMAxCNT_H bits 12-13. FIFO A asks DMA1 and FIFO B asks DMA2 (NanoBoyAdvance dma.cc)
     def trigger(timing, bus)
-      start_timing, channels = TRIGGERS.fetch(timing)
-      channels.each do |channel_index|
-        dma = @channels[channel_index]
-        transfer(channel_index, bus) if dma[95] == 1 && (dma >> 92) & 0b11 == start_timing
+      case timing
+      when :vblank then 4.times { |channel_index| start(channel_index, 1, bus) }
+      when :hblank then 4.times { |channel_index| start(channel_index, 2, bus) }
+      when :fifo_a then start(1, 3, bus)
+      when :fifo_b then start(2, 3, bus)
       end
     end
 
     private
 
-    def transfer(channel_index, bus)
-      dma = @channels[channel_index]
-      cnt_h = (dma >> 80) & 0xFFFF
+    # A register of a channel, from its bytes: SAD is at 0, DAD at 4, CNT_L at 8, CNT_H at 10
+    def register(channel_index, offset, size)
+      base = (channel_index * 12) + offset
+      value = 0
+      size.times { |i| value |= @io[base + i] << (i * 8) }
+      value
+    end
 
-      fifo = fifo?(dma)
+    def cnt_h(channel_index)
+      register(channel_index, 10, 2)
+    end
+
+    def start(channel_index, start_timing, bus)
+      cnt_h = cnt_h(channel_index)
+      transfer(channel_index, bus) if cnt_h[15] == 1 && (cnt_h >> 12) & 0b11 == start_timing
+    end
+
+    def transfer(channel_index, bus)
+      cnt_h = cnt_h(channel_index)
+
+      fifo = fifo?(cnt_h)
       halfword = cnt_h[10] == 0 && !fifo
       step = halfword ? 2 : 4
       dad_diff = fifo ? 0 : [step, -step, 0, step][(cnt_h >> 5) & 3]
@@ -63,7 +74,7 @@ module RubyboyAdvance
 
       sad = @sads[channel_index]
       dad = @dads[channel_index]
-      sad_diff = step if (0x0800_0000...0x0E00_0000).cover?(sad) # Game Pak ROM is always read upward
+      sad_diff = step if sad >= 0x0800_0000 && sad < 0x0E00_0000 # Game Pak ROM is always read upward
 
       # Only the first unit is non-sequential, wherever the addresses go (NanoBoyAdvance dma.cc)
       @counts[channel_index].times do |i|
@@ -80,22 +91,24 @@ module RubyboyAdvance
 
       if cnt_h[9] == 1 && (cnt_h >> 12) & 3 != 0
         # A repeat counts CNT_L as it is now; the source goes on (NanoBoyAdvance dma.cc RunChannel)
-        @counts[channel_index] = count(dma, channel_index)
-        @dads[channel_index] = (dma >> 32) & DAD_MASKS[channel_index] if (cnt_h >> 5) & 3 == 3
+        @counts[channel_index] = count(channel_index)
+        @dads[channel_index] = register(channel_index, 4, 4) & DAD_MASKS[channel_index] if (cnt_h >> 5) & 3 == 3
       else
-        @channels[channel_index] &= ~(1 << 95)
+        @io[(channel_index * 12) + 11] &= 0x7F
       end
     end
 
     # Start timing 3 feeds a sound FIFO from DMA1 or DMA2: four words to one address, whatever the registers say
-    def fifo?(dma) = (dma >> 92) & 0b11 == 3
+    def fifo?(cnt_h)
+      (cnt_h >> 12) & 0b11 == 3
+    end
 
     # CNT_L, where 0 means the most the channel can move
-    def count(dma, channel_index)
-      return 4 if fifo?(dma)
+    def count(channel_index)
+      return 4 if fifo?(cnt_h(channel_index))
 
       max = channel_index == 3 ? 0x10000 : 0x4000
-      cnt_l = (dma >> 64) & (max - 1)
+      cnt_l = register(channel_index, 8, 2) & (max - 1)
       cnt_l == 0 ? max : cnt_l
     end
   end

@@ -28,7 +28,8 @@ module RubyboyAdvance
       self.pc = 0x0800_0000
       @cpsr = 0x1F
       @spsrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
-      @banked_regs = { usr: Array.new(5, 0), fiq: Array.new(5, 0) }
+      @banked_usr = Array.new(5, 0) # r8-r12 of every mode but FIQ
+      @banked_fiq = Array.new(5, 0)
       @sps = { usr: 0, fiq: 0, irq: 0x0300_7FA0, svc: 0x0300_7FE0, abt: 0, und: 0 }
       @lrs = { usr: 0, fiq: 0, irq: 0, svc: 0, abt: 0, und: 0 }
       @bus = bus
@@ -62,7 +63,7 @@ module RubyboyAdvance
       @regs[15] &= flag_t ? ~1 : ~3
 
       if @interrupt.irq? && @cpsr[7] == 0
-        fetch(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
+        fetch_opcode(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
         @spsrs[:irq] = @cpsr
         update_banked_regs(:irq)
         self.lr = pc + 4
@@ -74,7 +75,7 @@ module RubyboyAdvance
       address = pc
 
       if flag_t
-        opcode = fetch(address, 2)
+        opcode = fetch_opcode(address, 2)
         @regs[15] += 2
 
         case opcode >> 12
@@ -375,7 +376,7 @@ module RubyboyAdvance
         return
       end
 
-      opcode = fetch(address, 4)
+      opcode = fetch_opcode(address, 4)
       @regs[15] += 4
       return unless executable?(opcode >> 28)
 
@@ -595,12 +596,8 @@ module RubyboyAdvance
 
       when :multiply
         @bus.idle(multiply_cycles(reg(opcode[8..11])) + opcode[21])
-        case opcode[21]
-        when 0
-          result = (reg(opcode[0..3]) * reg(opcode[8..11])) & 0xFFFF_FFFF
-        when 1
-          result = (reg(opcode[0..3]) * reg(opcode[8..11]) + reg(opcode[12..15])) & 0xFFFF_FFFF
-        end
+        result = mul32(reg(opcode[0..3]), reg(opcode[8..11]))
+        result = (result + reg(opcode[12..15])) & 0xFFFF_FFFF if opcode[21] == 1
 
         update_nz(result) if opcode[20] == 1
 
@@ -608,17 +605,19 @@ module RubyboyAdvance
 
       when :multiply_long
         @bus.idle(multiply_cycles(reg(opcode[8..11]), signed: opcode[22] == 1) + 1 + opcode[21])
-        result = opcode[22] == 0 ? (reg(opcode[0..3]) * reg(opcode[8..11])) : (uint_to_int(reg(opcode[0..3])) * uint_to_int(reg(opcode[8..11])))
+        high, low = mul64(reg(opcode[0..3]), reg(opcode[8..11]), signed: opcode[22] == 1)
+        if opcode[21] == 1
+          low += reg(opcode[12..15])
+          high = (high + reg(opcode[16..19]) + (low >> 32)) & 0xFFFF_FFFF
+          low &= 0xFFFF_FFFF
+        end
 
-        result += (reg(opcode[16..19]) << 32) | reg(opcode[12..15]) if opcode[21] == 1
-        result &= 0xFFFF_FFFF_FFFF_FFFF
-
-        @regs[opcode[16..19]] = result >> 32
-        @regs[opcode[12..15]] = result & 0xFFFF_FFFF
+        @regs[opcode[16..19]] = high
+        @regs[opcode[12..15]] = low
 
         if opcode[20] == 1
-          self.flag_z = result == 0
-          self.flag_n = result[63] == 1
+          self.flag_z = high == 0 && low == 0
+          self.flag_n = high[31] == 1
         end
       when :halfword_data_transfer
         offset = opcode[22] == 0 ? reg(opcode[0..3]) : (opcode[8..11] << 4) | opcode[0..3]
@@ -662,7 +661,8 @@ module RubyboyAdvance
     end
 
     # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
-    def fetch(address, size)
+    # Not named fetch: Spinel a293f9d64 refuses a program with optparse and a method of that name
+    def fetch_opcode(address, size)
       if address == @next_address
         opcode = @next_opcode
         @next_opcode = @after_next_opcode
@@ -710,20 +710,6 @@ module RubyboyAdvance
       end
     end
 
-    def banked_regs_by_mode(mode)
-      case mode
-      when :fiq then @banked_regs[:fiq]
-      else @banked_regs[:usr]
-      end
-    end
-
-    def set_banked_regs_by_mode(mode, value)
-      case mode
-      when :fiq then @banked_regs[:fiq] = value
-      else @banked_regs[:usr] = value
-      end
-    end
-
     def update_banked_regs(new_mode, from = current_cpu_mode)
       current_mode = from
 
@@ -735,8 +721,10 @@ module RubyboyAdvance
       @lrs[current_mode] = lr
       self.lr = @lrs[new_mode]
 
-      set_banked_regs_by_mode(current_mode, @regs[8..12])
-      @regs[8..12] = banked_regs_by_mode(new_mode)
+      saved = current_mode == :fiq ? @banked_fiq : @banked_usr
+      loaded = new_mode == :fiq ? @banked_fiq : @banked_usr
+      5.times { |i| saved[i] = @regs[8 + i] }
+      5.times { |i| @regs[8 + i] = loaded[i] }
     end
 
     def uint_to_int(n)
@@ -882,7 +870,24 @@ module RubyboyAdvance
     end
 
     def mul(x, y)
-      update_nz((x * y) & 0xFFFF_FFFF)
+      update_nz(mul32(x, y))
+    end
+
+    # Products are worked out by 16-bit halves, so that nothing passes 64 bits
+    def mul32(x, y)
+      ((x * (y & 0xFFFF)) + (((x * (y >> 16)) & 0xFFFF) << 16)) & 0xFFFF_FFFF
+    end
+
+    # The high and low words of x * y
+    def mul64(x, y, signed:)
+      low = (x & 0xFFFF) * (y & 0xFFFF)
+      middle = ((x & 0xFFFF) * (y >> 16)) + ((x >> 16) * (y & 0xFFFF)) + (low >> 16)
+      high = ((x >> 16) * (y >> 16)) + (middle >> 16)
+      if signed
+        high -= y if x[31] == 1
+        high -= x if y[31] == 1
+      end
+      [high & 0xFFFF_FFFF, ((middle & 0xFFFF) << 16) | (low & 0xFFFF)]
     end
 
     def and32(x, y)
@@ -897,25 +902,25 @@ module RubyboyAdvance
       update_nz(x ^ y)
     end
 
+    # The amount can be up to 255; no shift here goes past 32 places, so that nothing passes 64 bits
     def lsl(x, n, s: false)
       return x if n == 0
 
-      result = (x << n)
-      @shifter_carry = result[32] == 1 if s
-
-      result & 0xFFFF_FFFF
+      @shifter_carry = n <= 32 && x[32 - n] == 1 if s
+      n < 32 ? (x << n) & 0xFFFF_FFFF : 0
     end
 
     def lsr(x, n, s: false)
       return x if n == 0
 
-      @shifter_carry = x[n - 1] == 1 if s
-      (x >> n) & 0xFFFF_FFFF
+      @shifter_carry = n <= 32 && x[n - 1] == 1 if s
+      n < 32 ? (x >> n) & 0xFFFF_FFFF : 0
     end
 
     def asr(x, n, s: false)
       return x if n == 0
 
+      n = 32 if n > 32
       @shifter_carry = uint_to_int(x)[n - 1] == 1 if s
       (uint_to_int(x) >> n) & 0xFFFF_FFFF
     end
@@ -923,7 +928,8 @@ module RubyboyAdvance
     def ror(x, n, s: false)
       return x if n == 0
 
-      result = ((x >> (n & 0x1F)) | (x << (32 - (n & 0x1F)))) & 0xFFFF_FFFF
+      r = n & 0x1F
+      result = r == 0 ? x : ((x >> r) | (x << (32 - r))) & 0xFFFF_FFFF
       @shifter_carry = result[31] == 1 if s
 
       result
