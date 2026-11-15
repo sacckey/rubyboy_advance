@@ -125,12 +125,49 @@ RSpec.describe RubyboyAdvance::Dma do
     end
   end
 
-  it 'counts the cycles of each halfword it reads and writes' do
-    bus.take_cycles
+  describe 'cycles' do
+    let(:rom) { [0] * 16 }
 
-    start(3, 0x0200_0000, 0x0300_0000, 4, 0x8000) # four register writes, then EWRAM to IWRAM four times
+    # Past the four register writes that start it
+    def transfer_cycles(...)
+      bus.take_cycles
+      start(...)
+      bus.take_cycles - 4
+    end
 
-    expect(bus.take_cycles).to eq(4 + (4 * (3 + 1)))
+    it 'counts each unit it reads and writes, and two internal cycles' do
+      expect(transfer_cycles(3, 0x0200_0000, 0x0300_0000, 4, 0x8000)).to eq((4 * (3 + 1)) + 2) # EWRAM to IWRAM
+    end
+
+    it 'reads the first halfword from the ROM at the full cost and the rest as sequential' do
+      expect(transfer_cycles(3, 0x0800_0000, 0x0300_0000, 4, 0x8000)).to eq(5 + (3 * 3) + 4 + 2)
+    end
+
+    it 'reads the first word from the ROM at the full cost and the rest as sequential' do
+      expect(transfer_cycles(3, 0x0800_0000, 0x0300_0000, 4, 0x8400)).to eq(8 + (3 * 6) + 4 + 2)
+    end
+
+    it 'writes halfwords after the first as sequential, even to a fixed address' do
+      expect(transfer_cycles(3, 0x0300_0000, 0x0C00_0000, 4, 0x8040)).to eq(4 + 5 + (3 * 9) + 2)
+    end
+
+    it 'writes words after the first as sequential' do
+      expect(transfer_cycles(3, 0x0300_0000, 0x0C00_0000, 4, 0x8400)).to eq(4 + 14 + (3 * 18) + 2)
+    end
+
+    it 'starts each transfer with the full cost again' do
+      costs = Array.new(2) { transfer_cycles(3, 0x0800_0000, 0x0300_0000, 2, 0x8000) }
+
+      expect(costs).to eq([5 + 3 + 2 + 2] * 2)
+    end
+
+    it 'leaves the access after it non-sequential' do
+      start(3, 0x0300_0000, 0x0C00_0000, 4, 0x8000)
+      bus.take_cycles
+      bus.read16(0x0C00_0008)
+
+      expect(bus.take_cycles).to eq(5)
+    end
   end
 
   describe 'at VBlank and HBlank' do
@@ -144,7 +181,7 @@ RSpec.describe RubyboyAdvance::Dma do
 
       step(1007)
 
-      expect(bus.take_cycles).to eq(2 * (3 + 1))
+      expect(bus.take_cycles).to eq((2 * (3 + 1)) + 2)
     end
 
     it 'copies as VBlank starts and clears the enable bit without repeat' do

@@ -337,6 +337,45 @@ RSpec.describe RubyboyAdvance::Bus do
       end
     end
 
+    describe 'idle' do
+      it 'adds cycles without an access, and the access after it pays the full cost' do
+        bus.read16(0x0800_0000)
+        idle = cycles do
+          bus.idle
+          bus.idle(3)
+        end
+
+        expect([idle, cycles { bus.read16(0x0800_0002) }]).to eq([4, 5])
+      end
+    end
+
+    describe 'accesses the caller calls sequential or not' do
+      it 'counts the full cost for one that follows the last' do
+        bus.read16(0x0800_0000)
+        costs = [
+          cycles { bus.read16(0x0800_0002, false) }, cycles { bus.read32(0x0800_0004, false) },
+          cycles { bus.write16(0x0800_0008, 0, false) }, cycles { bus.write32(0x0800_000A, 0, false) }
+        ]
+
+        expect(costs).to eq([5, 8, 5, 8])
+      end
+
+      it 'counts the sequential cost for one somewhere else' do
+        costs = [
+          cycles { bus.read16(0x0800_0100, true) }, cycles { bus.read32(0x0800_0200, true) },
+          cycles { bus.write16(0x0800_0300, 0, true) }, cycles { bus.write32(0x0800_0400, 0, true) }
+        ]
+
+        expect(costs).to eq([3, 6, 3, 6])
+      end
+
+      it 'still lets the next access follow it' do
+        bus.read16(0x0800_0000, false)
+
+        expect(cycles { bus.read16(0x0800_0002) }).to eq(3)
+      end
+    end
+
     describe 'WAITCNT' do
       # 16 bits away from the last access, 16 bits following it, then the same for 32 bits
       def costs(area)

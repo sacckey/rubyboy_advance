@@ -138,6 +138,13 @@ RSpec.describe RubyboyAdvance::Cpu do
         expect([cpu.exec, cpu.exec]).to eq([1, 1])
       end
 
+      it 'drops the cycles of a transfer that ran while it was stopped' do
+        cpu.exec
+        bus.read32(0x0200_0000) # stands in for an HBlank DMA
+
+        expect([cpu.exec, bus.take_cycles]).to eq([1, 0])
+      end
+
       it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
         4.times { cpu.exec }
 
@@ -191,7 +198,7 @@ RSpec.describe RubyboyAdvance::Cpu do
       it 'reads the opcode after a data access at the full cost' do
         regs[1] = 0x0300_0000
 
-        expect([cpu.exec, cpu.exec, cpu.exec]).to eq([8 + 6 + 6 + 1, 8, 6])
+        expect([cpu.exec, cpu.exec, cpu.exec]).to eq([8 + 6 + 6 + 1 + 1, 8, 6])
       end
     end
 
@@ -201,7 +208,119 @@ RSpec.describe RubyboyAdvance::Cpu do
       it 'reads the words after the first as sequential' do
         regs[1] = 0x0800_0010
 
-        expect(cpu.exec).to eq(8 + 6 + 6 + 8 + 6)
+        expect(cpu.exec).to eq(8 + 6 + 6 + 8 + 6 + 1)
+      end
+    end
+
+    context 'with a shift by a register in the ROM' do
+      let(:rom) { [0x11, 0x02, 0xA0, 0xE1] + (nop * 5) } # mov r0, r1, lsl r2
+
+      it 'reads the opcode after an internal cycle at the full cost' do
+        expect([cpu.exec, cpu.exec, cpu.exec]).to eq([8 + 6 + 6 + 1, 8, 6])
+      end
+    end
+
+    describe 'internal cycles' do
+      let(:rom) { [] }
+      let(:base) { 0x0300_0000 }
+
+      before do
+        regs[1] = 0x0300_0100
+        regs[2] = 0
+      end
+
+      # Cycles of one instruction in IWRAM past its opcode reads: 1 for each data access, plus the internal ones
+      def cycles_past_fetch(opcode, thumb: false)
+        thumb ? bus.write16(base, opcode) : bus.write32(base, opcode)
+        cpu.instance_variable_set(:@cpsr, 0x3F) if thumb
+        regs[15] = base
+        bus.take_cycles
+        cpu.exec - 3
+      end
+
+      {
+        'mov r0, r1, lsl #2' => [0xE1A00101, 0],
+        'mov r0, r1, lsl r2' => [0xE1A00211, 1],
+        'moveq r0, r1, lsl r2, not run' => [0x01A00211, 0],
+        'str r0, [r1]' => [0xE5810000, 1],
+        'ldr r0, [r1]' => [0xE5910000, 1 + 1],
+        'ldrb r0, [r1]' => [0xE5D10000, 1 + 1],
+        'ldrh r0, [r1]' => [0xE1D100B0, 1 + 1],
+        'ldrsb r0, [r1]' => [0xE1D100D0, 1 + 1],
+        'ldrsh r0, [r1]' => [0xE1D100F0, 1 + 1],
+        'stmia r1, {r2, r3}' => [0xE881000C, 2],
+        'ldmia r1, {r2, r3}' => [0xE891000C, 2 + 1],
+        'ldmia r1, {}' => [0xE8910000, 1 + 1],
+        'swp r0, r2, [r1]' => [0xE1010092, 2 + 1],
+        'swpb r0, r2, [r1]' => [0xE1410092, 2 + 1]
+      }.each do |name, (opcode, cycles)|
+        it "takes #{cycles} for #{name}" do
+          expect(cycles_past_fetch(opcode)).to eq(cycles)
+        end
+      end
+
+      it 'takes one internal cycle for ldrsh from an odd address, which loads a byte' do
+        regs[1] = 0x0300_0101
+
+        expect(cycles_past_fetch(0xE1D100F0)).to eq(1 + 1)
+      end
+
+      {
+        0x0000_00FF => 1, 0x0000_0100 => 2, 0x0000_FFFF => 2, 0x0001_0000 => 3, 0x00FF_FFFF => 3, 0x0100_0000 => 4,
+        0xFFFF_FF00 => 1, 0xFFFF_FEFF => 2, 0xFFFF_0000 => 2, 0xFFFE_FFFF => 3, 0xFF00_0000 => 3, 0xFEFF_FFFF => 4
+      }.each do |multiplier, cycles|
+        it "takes #{cycles} for mul by #{format('%#010x', multiplier)}, and one more for each extra step of the others" do
+          regs[2] = multiplier
+          mul, mla, smull, smlal = [0xE0000291, 0xE0203291, 0xE0C54291, 0xE0E54291].map { cycles_past_fetch(it) }
+
+          expect([mul, mla, smull, smlal]).to eq([cycles, cycles + 1, cycles + 1, cycles + 2])
+        end
+      end
+
+      { 0x0000_00FF => 1, 0x0000_0100 => 2, 0x00FF_FFFF => 3, 0x0100_0000 => 4, 0xFFFF_FF00 => 4 }.each do |multiplier, cycles|
+        it "takes #{cycles + 1} for umull by #{format('%#010x', multiplier)}, where upper ones do not count, and one more for umlal" do
+          regs[2] = multiplier
+
+          expect([cycles_past_fetch(0xE0854291), cycles_past_fetch(0xE0A54291)]).to eq([cycles + 1, cycles + 2])
+        end
+      end
+
+      describe 'in Thumb' do
+        {
+          'lsl r0, r1, #2' => [0x0088, 0],
+          'and r0, r1' => [0x4008, 0],
+          'lsl r0, r1' => [0x4088, 1],
+          'lsr r0, r1' => [0x40C8, 1],
+          'asr r0, r1' => [0x4108, 1],
+          'ror r0, r1' => [0x41C8, 1],
+          'str r0, [r1]' => [0x6008, 1],
+          'ldr r0, [pc]' => [0x4800, 1 + 1],
+          'ldr r0, [r1, r2]' => [0x5888, 1 + 1],
+          'ldrb r0, [r1, r2]' => [0x5C88, 1 + 1],
+          'ldrsb r0, [r1, r2]' => [0x5688, 1 + 1],
+          'ldrh r0, [r1, r2]' => [0x5A88, 1 + 1],
+          'ldrsh r0, [r1, r2]' => [0x5E88, 1 + 1],
+          'ldr r0, [r1]' => [0x6808, 1 + 1],
+          'ldrb r0, [r1]' => [0x7808, 1 + 1],
+          'ldrh r0, [r1]' => [0x8808, 1 + 1],
+          'ldr r0, [sp]' => [0x9800, 1 + 1],
+          'push {r0, r1}' => [0xB403, 2],
+          'pop {r0, r1}' => [0xBC03, 2 + 1],
+          'pop {pc}' => [0xBD00, 1 + 1],
+          'stmia r1!, {r2, r3}' => [0xC10C, 2],
+          'ldmia r1!, {r2, r3}' => [0xC90C, 2 + 1]
+        }.each do |name, (opcode, cycles)|
+          it "takes #{cycles} for #{name}" do
+            expect(cycles_past_fetch(opcode, thumb: true)).to eq(cycles)
+          end
+        end
+
+        it 'takes the cycles of mul from the value of rd' do
+          regs[0] = 0x0012_3456
+          regs[1] = 0x12
+
+          expect(cycles_past_fetch(0x4348, thumb: true)).to eq(3) # mul r0, r1
+        end
       end
     end
 
@@ -211,7 +330,7 @@ RSpec.describe RubyboyAdvance::Cpu do
       regs[15] = 0x0300_0000
       bus.take_cycles
 
-      expect([cpu.exec, cpu.exec]).to eq([3 + 6, 1 + 6])
+      expect([cpu.exec, cpu.exec]).to eq([3 + 6 + 1, 1 + 6])
     end
   end
 

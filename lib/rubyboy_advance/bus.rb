@@ -53,7 +53,13 @@ module RubyboyAdvance
       cycles
     end
 
-    # ponytail: sequential is guessed from the address, so every DMA unit counts as non-sequential
+    # Time without a bus access; the access after it is never sequential
+    def idle(cycles = 1)
+      @cycles += cycles
+      @next_addr = nil
+    end
+
+    # ponytail: sequential is guessed from the address unless the caller says, as the DMA does
     def read(addr)
       @cycles += (addr == @next_addr ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
       @next_addr = addr + 1
@@ -66,26 +72,26 @@ module RubyboyAdvance
       raw_write(addr, value)
     end
 
-    def read16(addr)
-      @cycles += (addr == @next_addr ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
+    def read16(addr, seq = addr == @next_addr)
+      @cycles += (seq ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
       @next_addr = addr + 2
       raw_read16(addr)
     end
 
-    def write16(addr, value)
-      @cycles += (addr == @next_addr ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
+    def write16(addr, value, seq = addr == @next_addr)
+      @cycles += (seq ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
       @next_addr = addr + 2
       raw_write16(addr, value)
     end
 
-    def read32(addr)
-      @cycles += (addr == @next_addr ? @seq32 : @nonseq32)[(addr >> 24) & 0xFF]
+    def read32(addr, seq = addr == @next_addr)
+      @cycles += (seq ? @seq32 : @nonseq32)[(addr >> 24) & 0xFF]
       @next_addr = addr + 4
       raw_read32(addr)
     end
 
-    def write32(addr, value)
-      @cycles += (addr == @next_addr ? @seq32 : @nonseq32)[(addr >> 24) & 0xFF]
+    def write32(addr, value, seq = addr == @next_addr)
+      @cycles += (seq ? @seq32 : @nonseq32)[(addr >> 24) & 0xFF]
       @next_addr = addr + 4
       raw_write32(addr, value)
     end

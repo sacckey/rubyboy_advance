@@ -63,12 +63,15 @@ module RubyboyAdvance
       dad = @dads[channel_index]
       sad_diff = step if (0x0800_0000...0x0E00_0000).cover?(sad) # Game Pak ROM is always read upward
 
-      @counts[channel_index].times do
-        value = halfword ? bus.read16(sad) : bus.read32(sad)
-        halfword ? bus.write16(dad, value) : bus.write32(dad, value)
+      # Only the first unit is non-sequential, wherever the addresses go (NanoBoyAdvance dma.cc)
+      @counts[channel_index].times do |i|
+        seq = i > 0
+        value = halfword ? bus.read16(sad, seq) : bus.read32(sad, seq)
+        halfword ? bus.write16(dad, value, seq) : bus.write32(dad, value, seq)
         sad += sad_diff
         dad += dad_diff
       end
+      bus.idle(2) # ponytail: two for each channel, not two for all that start together
 
       @sads[channel_index] = sad
       @dads[channel_index] = dad
