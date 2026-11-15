@@ -8,7 +8,10 @@ module RubyboyAdvance
 
     ffi_lib 'SDL3'
 
+    INIT_AUDIO = 0x10
     INIT_VIDEO = 0x20
+    AUDIO_S16LE = 0x8010
+    AUDIO_DEVICE_DEFAULT_PLAYBACK = 0xFFFFFFFF
     PIXELFORMAT_XBGR1555 = 0x15530F02
     TEXTUREACCESS_STREAMING = 1
     SCALEMODE_NEAREST = 0
@@ -41,5 +44,9 @@ module RubyboyAdvance
     attach_function :render_present, :SDL_RenderPresent, [:pointer], :bool
     attach_function :poll_event, :SDL_PollEvent, [:pointer], :bool
     attach_function :get_keyboard_state, :SDL_GetKeyboardState, [:pointer], :pointer
+    attach_function :open_audio_device_stream, :SDL_OpenAudioDeviceStream, %i[uint32 pointer pointer pointer], :pointer
+    attach_function :resume_audio_stream_device, :SDL_ResumeAudioStreamDevice, [:pointer], :bool
+    attach_function :put_audio_stream_data, :SDL_PutAudioStreamData, %i[pointer buffer_in int], :bool
+    attach_function :get_audio_stream_queued, :SDL_GetAudioStreamQueued, [:pointer], :int
   end
 end
