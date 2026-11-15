@@ -49,6 +49,9 @@ Spinel's `Integer` is 64 bits wide, and by default a result that does not fit ra
 64 bits: registers wider than that are held as bytes, products are worked out by halves, and no
 shift goes past the width of a word.
 
+With the Spinel revision below, a program that uses `optparse` is refused if it also has a method
+named `fetch`. That is why the CPU's is `fetch_opcode`.
+
 ## Verified with
 
-Spinel `0890056b9` (matz/spinel, 2026-10-11) on macOS (Apple Silicon).
+Spinel `a293f9d64` (matz/spinel, 2026-11-15) on macOS (Apple Silicon).

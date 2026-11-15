@@ -63,7 +63,7 @@ module RubyboyAdvance
       @regs[15] &= flag_t ? ~1 : ~3
 
       if @interrupt.irq? && @cpsr[7] == 0
-        fetch(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
+        fetch_opcode(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
         @spsrs[:irq] = @cpsr
         update_banked_regs(:irq)
         self.lr = pc + 4
@@ -75,7 +75,7 @@ module RubyboyAdvance
       address = pc
 
       if flag_t
-        opcode = fetch(address, 2)
+        opcode = fetch_opcode(address, 2)
         @regs[15] += 2
 
         case opcode >> 12
@@ -376,7 +376,7 @@ module RubyboyAdvance
         return
       end
 
-      opcode = fetch(address, 4)
+      opcode = fetch_opcode(address, 4)
       @regs[15] += 4
       return unless executable?(opcode >> 28)
 
@@ -661,7 +661,8 @@ module RubyboyAdvance
     end
 
     # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
-    def fetch(address, size)
+    # Not named fetch: Spinel a293f9d64 refuses a program with optparse and a method of that name
+    def fetch_opcode(address, size)
       if address == @next_address
         opcode = @next_opcode
         @next_opcode = @after_next_opcode
