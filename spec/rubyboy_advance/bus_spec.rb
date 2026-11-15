@@ -263,4 +263,152 @@ RSpec.describe RubyboyAdvance::Bus do
       expect(bus.read(0x0200_0002)).to eq(0)
     end
   end
+
+  describe 'cycles' do
+    let(:bus) do
+      described_class.new(
+        [0] * 4, [0] * 4, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt,
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+      )
+    end
+
+    def cycles
+      bus.take_cycles
+      yield
+      bus.take_cycles
+    end
+
+    {
+      'the BIOS' => [0x0000_0000, 1, 1],
+      'EWRAM' => [0x0200_0000, 3, 6],
+      'IWRAM' => [0x0300_0000, 1, 1],
+      'I/O' => [0x0400_0000, 1, 1],
+      'palette RAM' => [0x0500_0000, 1, 2],
+      'VRAM' => [0x0600_0000, 1, 2],
+      'OAM' => [0x0700_0000, 1, 1],
+      'the ROM' => [0x0800_0000, 5, 8],
+      'the second ROM mirror' => [0x0A00_0000, 5, 10],
+      'the last ROM mirror' => [0x0D00_0000, 5, 14],
+      'cartridge RAM' => [0x0E00_0000, 5, 5],
+      'unused memory' => [0x0100_0000, 1, 1],
+      'the top of the address space' => [0xFF00_0000, 1, 1],
+      'an address past 32 bits' => [0x1_0000_0000, 1, 1]
+    }.each do |name, (addr, cost, cost32)|
+      it "counts #{cost} for each 8- and 16-bit access and #{cost32} for each 32-bit one to #{name}, away from the last" do
+        reads = [cycles { bus.read(addr) }, cycles { bus.read16(addr) }, cycles { bus.read32(addr) }]
+        writes = [cycles { bus.write(addr, 0) }, cycles { bus.write16(addr, 0) }, cycles { bus.write32(addr, 0) }]
+
+        expect([reads, writes]).to eq([[cost, cost, cost32]] * 2)
+      end
+    end
+
+    it 'adds up the accesses until take_cycles, which starts again from 0' do
+      bus.take_cycles
+      bus.read16(0x0200_0000)
+      bus.write32(0x0800_0000, 0)
+
+      expect([bus.take_cycles, bus.take_cycles]).to eq([11, 0])
+    end
+
+    describe 'accesses that follow the last one' do
+      {
+        'the ROM' => [0x0800_0000, 3, 6],
+        'the second ROM mirror' => [0x0A00_0000, 5, 10],
+        'the last ROM mirror' => [0x0C00_0000, 9, 18],
+        'EWRAM' => [0x0200_0000, 3, 6],
+        'cartridge RAM' => [0x0E00_0000, 5, 5]
+      }.each do |name, (addr, cost, cost32)|
+        it "counts #{cost} for each 8- and 16-bit access and #{cost32} for each 32-bit one to #{name}" do
+          bus.write(addr, 0)
+          reads = [cycles { bus.read(addr + 1) }, cycles { bus.read16(addr + 2) }, cycles { bus.read32(addr + 4) }]
+          writes = [cycles { bus.write32(addr + 8, 0) }, cycles { bus.write16(addr + 12, 0) }, cycles { bus.write(addr + 14, 0) }]
+
+          expect([reads, writes]).to eq([[cost, cost, cost32], [cost32, cost, cost]])
+        end
+      end
+
+      it 'counts the full cost again after a gap or an access somewhere else' do
+        bus.read16(0x0800_0000)
+        after_gap = cycles { bus.read16(0x0800_0004) }
+        bus.read16(0x0200_0000)
+        after_another = cycles { bus.read16(0x0800_0006) }
+
+        expect([after_gap, after_another]).to eq([5, 5])
+      end
+    end
+
+    describe 'idle' do
+      it 'adds cycles without an access, and the access after it pays the full cost' do
+        bus.read16(0x0800_0000)
+        idle = cycles do
+          bus.idle
+          bus.idle(3)
+        end
+
+        expect([idle, cycles { bus.read16(0x0800_0002) }]).to eq([4, 5])
+      end
+    end
+
+    describe 'accesses the caller calls sequential or not' do
+      it 'counts the full cost for one that follows the last' do
+        bus.read16(0x0800_0000)
+        costs = [
+          cycles { bus.read16(0x0800_0002, false) }, cycles { bus.read32(0x0800_0004, false) },
+          cycles { bus.write16(0x0800_0008, 0, false) }, cycles { bus.write32(0x0800_000A, 0, false) }
+        ]
+
+        expect(costs).to eq([5, 8, 5, 8])
+      end
+
+      it 'counts the sequential cost for one somewhere else' do
+        costs = [
+          cycles { bus.read16(0x0800_0100, true) }, cycles { bus.read32(0x0800_0200, true) },
+          cycles { bus.write16(0x0800_0300, 0, true) }, cycles { bus.write32(0x0800_0400, 0, true) }
+        ]
+
+        expect(costs).to eq([3, 6, 3, 6])
+      end
+
+      it 'still lets the next access follow it' do
+        bus.read16(0x0800_0000, false)
+
+        expect(cycles { bus.read16(0x0800_0002) }).to eq(3)
+      end
+    end
+
+    describe 'WAITCNT' do
+      # 16 bits away from the last access, 16 bits following it, then the same for 32 bits
+      def costs(area)
+        addr = area << 24
+        [cycles { bus.read16(addr) }, cycles { bus.read16(addr + 2) }, cycles { bus.read32(addr) }, cycles { bus.read32(addr + 4) }]
+      end
+
+      {
+        0x0000 => { 0x08 => [5, 3, 8, 6], 0x0A => [5, 5, 10, 10], 0x0C => [5, 9, 14, 18], 0x0E => [5, 5, 5, 5] },
+        0x4317 => { 0x08 => [4, 2, 6, 4], 0x0A => [5, 5, 10, 10], 0x0C => [9, 9, 18, 18], 0x0E => [9, 9, 9, 9] },
+        0x06A9 => { 0x08 => [3, 3, 6, 6], 0x0A => [4, 2, 6, 4], 0x0C => [3, 2, 5, 4], 0x0E => [4, 4, 4, 4] },
+        0x055E => { 0x08 => [9, 2, 11, 4], 0x0A => [3, 5, 8, 10], 0x0C => [4, 2, 6, 4], 0x0E => [3, 3, 3, 3] }
+      }.each do |waitcnt, expected|
+        it "sets the costs of the ROM mirrors and the cartridge RAM for #{format('%#06x', waitcnt)}" do
+          bus.write16(0x0400_0204, waitcnt)
+
+          expect(expected.keys.to_h { |area| [area, costs(area)] }).to eq(expected)
+        end
+      end
+
+      it 'gives the second half of each area the same costs as the first' do
+        bus.write16(0x0400_0204, 0x06A9)
+
+        expect([0x09, 0x0B, 0x0D, 0x0F].map { costs(it) }).to eq([0x08, 0x0A, 0x0C, 0x0E].map { costs(it) })
+      end
+
+      it 'takes a write to either byte alone' do
+        bus.write(0x0400_0204, 0x10)
+        lower = costs(0x08)
+        bus.write(0x0400_0205, 0x07)
+
+        expect([lower, costs(0x08), costs(0x0C)]).to eq([[5, 2, 7, 4], [5, 2, 7, 4], [9, 2, 11, 4]])
+      end
+    end
+  end
 end

@@ -125,10 +125,64 @@ RSpec.describe RubyboyAdvance::Dma do
     end
   end
 
+  describe 'cycles' do
+    let(:rom) { [0] * 16 }
+
+    # Past the four register writes that start it
+    def transfer_cycles(...)
+      bus.take_cycles
+      start(...)
+      bus.take_cycles - 4
+    end
+
+    it 'counts each unit it reads and writes, and two internal cycles' do
+      expect(transfer_cycles(3, 0x0200_0000, 0x0300_0000, 4, 0x8000)).to eq((4 * (3 + 1)) + 2) # EWRAM to IWRAM
+    end
+
+    it 'reads the first halfword from the ROM at the full cost and the rest as sequential' do
+      expect(transfer_cycles(3, 0x0800_0000, 0x0300_0000, 4, 0x8000)).to eq(5 + (3 * 3) + 4 + 2)
+    end
+
+    it 'reads the first word from the ROM at the full cost and the rest as sequential' do
+      expect(transfer_cycles(3, 0x0800_0000, 0x0300_0000, 4, 0x8400)).to eq(8 + (3 * 6) + 4 + 2)
+    end
+
+    it 'writes halfwords after the first as sequential, even to a fixed address' do
+      expect(transfer_cycles(3, 0x0300_0000, 0x0C00_0000, 4, 0x8040)).to eq(4 + 5 + (3 * 9) + 2)
+    end
+
+    it 'writes words after the first as sequential' do
+      expect(transfer_cycles(3, 0x0300_0000, 0x0C00_0000, 4, 0x8400)).to eq(4 + 14 + (3 * 18) + 2)
+    end
+
+    it 'starts each transfer with the full cost again' do
+      costs = Array.new(2) { transfer_cycles(3, 0x0800_0000, 0x0300_0000, 2, 0x8000) }
+
+      expect(costs).to eq([5 + 3 + 2 + 2] * 2)
+    end
+
+    it 'leaves the access after it non-sequential' do
+      start(3, 0x0300_0000, 0x0C00_0000, 4, 0x8000)
+      bus.take_cycles
+      bus.read16(0x0C00_0008)
+
+      expect(bus.take_cycles).to eq(5)
+    end
+  end
+
   describe 'at VBlank and HBlank' do
     let(:table) { 0x0200_1000 }
 
     before { 161.times { |i| bus.write16(table + (i * 2), i + 1) } } # entry i is i + 1
+
+    it 'leaves the cycles of an HBlank transfer for whoever asks next' do
+      start(0, table, 0x0300_0000, 2, 0xA000) # HBlank
+      bus.take_cycles
+
+      step(1007)
+
+      expect(bus.take_cycles).to eq((2 * (3 + 1)) + 2)
+    end
 
     it 'copies as VBlank starts and clears the enable bit without repeat' do
       start(0, 0x0200_0000, 0x0300_0000, 3, 0x9000) # VBlank

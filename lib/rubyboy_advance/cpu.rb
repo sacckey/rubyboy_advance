@@ -35,19 +35,37 @@ module RubyboyAdvance
     end
 
     def exec
+      # A DMA since the last call held the bus, so its time passes before anything else runs
+      cycles = @bus.take_cycles
+      return cycles if cycles > 0
+
       return 1 if @interrupt.cpu_halted?
 
+      run_instruction
+      @bus.take_cycles
+    end
+
+    # Whether the instruction being executed is in the BIOS (0x0000-0x3FFF).
+    # pc is already past it, so an instruction at 0x3FFC leaves pc at 0x4000.
+    def in_bios?
+      pc <= 0x4000
+    end
+
+    private
+
+    def run_instruction
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
       @regs[15] &= flag_t ? ~1 : ~3
 
       if @interrupt.irq? && @cpsr[7] == 0
+        fetch(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
         @spsrs[:irq] = @cpsr
         update_banked_regs(:irq)
         self.lr = pc + 4
         @cpsr = (@cpsr & ~0x3F) | 0x80 | 0x12
         self.pc = 0x18
-        return 1
+        return
       end
 
       address = pc
@@ -111,8 +129,10 @@ module RubyboyAdvance
             rd_index = opcode[0..2]
             rd = reg(rd_index)
             @shifter_carry = nil
+            op = opcode[6..9]
+            @bus.idle if [0x2, 0x3, 0x4, 0x7].include?(op) # shifts
 
-            case opcode[6..9]
+            case op
             when 0x0 then @regs[rd_index] = and32(rd, rs)
             when 0x1 then @regs[rd_index] = xor(rd, rs)
             when 0x2 then @regs[rd_index] = update_nz(lsl(rd, rs & 0xFF, s: true))
@@ -126,7 +146,9 @@ module RubyboyAdvance
             when 0xA then sub(rd, rs)
             when 0xB then add(rd, rs)
             when 0xC then @regs[rd_index] = or32(rd, rs)
-            when 0xD then @regs[rd_index] = mul(rd, rs)
+            when 0xD
+              @bus.idle(multiply_cycles(rd))
+              @regs[rd_index] = mul(rd, rs)
             when 0xE then @regs[rd_index] = and32(rd, (~rs) & 0xFFFF_FFFF)
             when 0xF then @regs[rd_index] = xor(rs, 0xFFFF_FFFF)
             end
@@ -152,7 +174,7 @@ module RubyboyAdvance
             rd_index = opcode[8..10]
             offset = opcode[0..7] << 2
 
-            @regs[rd_index] = @bus.read32((reg(15) & ~2) + offset)
+            @regs[rd_index] = ldr((reg(15) & ~2) + offset)
           end
         when 0x5
           # Format 7/8: Load / store with register offset (bit 9: 0 = format 7, 1 = format 8 sign-extended)
@@ -170,7 +192,7 @@ module RubyboyAdvance
             when 0b10
               @regs[rd_index] = ldr(addr)
             when 0b11
-              @regs[rd_index] = @bus.read(addr)
+              @regs[rd_index] = ldrb(addr)
             end
           else
             case opcode[10..11]
@@ -201,7 +223,7 @@ module RubyboyAdvance
           when 0b10
             @bus.write(addr, reg(rd_index) & 0xFF)
           when 0b11
-            @regs[rd_index] = @bus.read(addr)
+            @regs[rd_index] = ldrb(addr)
           end
         when 0x8
           # Format 10: Load / store halfword
@@ -248,6 +270,7 @@ module RubyboyAdvance
 
             start_address = is_push ? sp - (n << 2) : sp
             current_address = start_address
+            @bus.idle unless is_push
             8.times do |i|
               next unless rlist[i] == 1
 
@@ -280,6 +303,7 @@ module RubyboyAdvance
           current_address = rb
           new_rb = rb + (n << 2)
           is_first = true
+          @bus.idle if is_load
           if n == 0
             if is_load then set_reg(15, @bus.read32(current_address))
             else @bus.write32(current_address, reg(15) + 2)
@@ -316,7 +340,7 @@ module RubyboyAdvance
             # Format 17: Software interrupt
             swi
           else
-            return 1 unless executable?(opcode[8..11])
+            return unless executable?(opcode[8..11])
 
             offset = opcode[0..7]
             offset -= 0x100 if offset[7] == 1
@@ -345,12 +369,12 @@ module RubyboyAdvance
           end
         end
 
-        return 1
+        return
       end
 
       opcode = fetch(address, 4)
       @regs[15] += 4
-      return 1 unless executable?(opcode >> 28)
+      return unless executable?(opcode >> 28)
 
       instruction = determine_instruction(opcode)
       case instruction
@@ -379,6 +403,7 @@ module RubyboyAdvance
         current_address = start_address
         new_rn = opcode[23] == 0 ? rn - (multiplicand << 2) : rn + (multiplicand << 2)
         is_first = true
+        @bus.idle if is_load
         if n == 0
           if is_load then set_reg(15, @bus.read32(current_address))
           else @bus.write32(current_address, reg(15) + 4)
@@ -426,6 +451,7 @@ module RubyboyAdvance
                 rm_index = opcode[0..3]
                 x = reg(rm_index)
                 if r == 1
+                  @bus.idle
                   rn += 4 if rn_index == 15
                   x += 4 if rm_index == 15
                 end
@@ -524,7 +550,7 @@ module RubyboyAdvance
 
         case code
         when 0x08, 0x09, 0x0A, 0x0B
-          return 1
+          return
         end
 
         set_reg(rd, result)
@@ -546,7 +572,7 @@ module RubyboyAdvance
         transfer(opcode, offset) do |addr|
           rd = opcode[12..15]
           if opcode[20] == 1
-            set_reg(rd, opcode[22] == 0 ? ldr(addr) : @bus.read(addr))
+            set_reg(rd, opcode[22] == 0 ? ldr(addr) : ldrb(addr))
           else
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             opcode[22] == 0 ? @bus.write32(addr, value) : @bus.write(addr, value & 0xFF)
@@ -560,11 +586,12 @@ module RubyboyAdvance
 
         addr = reg(rn_index)
         write_value = reg(rm_index)
-        read_value = is_byte ? @bus.read(addr) : ldr(addr)
+        read_value = is_byte ? ldrb(addr) : ldr(addr)
         is_byte ? @bus.write(addr, write_value & 0xFF) : @bus.write32(addr, write_value)
         set_reg(rd_index, read_value)
 
       when :multiply
+        @bus.idle(multiply_cycles(reg(opcode[8..11])) + opcode[21])
         case opcode[21]
         when 0
           result = (reg(opcode[0..3]) * reg(opcode[8..11])) & 0xFFFF_FFFF
@@ -577,6 +604,7 @@ module RubyboyAdvance
         @regs[opcode[16..19]] = result
 
       when :multiply_long
+        @bus.idle(multiply_cycles(reg(opcode[8..11]), signed: opcode[22] == 1) + 1 + opcode[21])
         result = opcode[22] == 0 ? (reg(opcode[0..3]) * reg(opcode[8..11])) : (uint_to_int(reg(opcode[0..3])) * uint_to_int(reg(opcode[8..11])))
 
         result += (reg(opcode[16..19]) << 32) | reg(opcode[12..15]) if opcode[21] == 1
@@ -628,17 +656,7 @@ module RubyboyAdvance
       else
         raise format('Unknown opcode %<opcode>08X at %<address>08X', opcode:, address:)
       end
-      # TODO: Implement proper cycle counting and other side effects for each instruction.
-      1
     end
-
-    # Whether the instruction being executed is in the BIOS (0x0000-0x3FFF).
-    # pc is already past it, so an instruction at 0x3FFC leaves pc at 0x4000.
-    def in_bios?
-      pc <= 0x4000
-    end
-
-    private
 
     # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
     def fetch(address, size)
@@ -850,6 +868,16 @@ module RubyboyAdvance
       result
     end
 
+    # 1 to 4 internal cycles: fewer when the multiplier's upper bytes are all 0 or, signed, all 1 (NanoBoyAdvance arithmetic.inl)
+    def multiply_cycles(multiplier, signed: true)
+      multiplier ^= 0xFFFF_FFFF if signed && multiplier[31] == 1
+      if multiplier < 0x100 then 1
+      elsif multiplier < 0x1_0000 then 2
+      elsif multiplier < 0x100_0000 then 3
+      else 4
+      end
+    end
+
     def mul(x, y)
       update_nz((x * y) & 0xFFFF_FFFF)
     end
@@ -903,17 +931,25 @@ module RubyboyAdvance
       ((x >> 1) | (@cpsr[29] << 31)) & 0xFFFF_FFFF
     end
 
+    # Every load takes one internal cycle.
     # Loads from a misaligned address rotate the aligned word/halfword
     def ldr(addr)
+      @bus.idle
       ror(@bus.read32(addr), (addr & 3) * 8)
     end
 
     def ldrh(addr)
+      @bus.idle
       ror(@bus.read16(addr), (addr & 1) * 8)
     end
 
+    def ldrb(addr)
+      @bus.idle
+      @bus.read(addr)
+    end
+
     def ldrsb(addr)
-      v = @bus.read(addr)
+      v = ldrb(addr)
       v[7] == 1 ? v | 0xFFFF_FF00 : v
     end
 
@@ -921,6 +957,7 @@ module RubyboyAdvance
     def ldrsh(addr)
       return ldrsb(addr) if addr[0] == 1
 
+      @bus.idle
       v = @bus.read16(addr)
       v[15] == 1 ? v | 0xFFFF_0000 : v
     end
