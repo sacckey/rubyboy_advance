@@ -11,7 +11,8 @@ RSpec.describe RubyboyAdvance::Ppu do
       RubyboyAdvance::Sram.new,
       interrupt,
       RubyboyAdvance::Timer.new(interrupt),
-      RubyboyAdvance::Keypad.new(interrupt)
+      RubyboyAdvance::Keypad.new(interrupt),
+      RubyboyAdvance::Apu.new
     )
   end
 

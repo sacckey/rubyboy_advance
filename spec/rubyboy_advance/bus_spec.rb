@@ -9,7 +9,8 @@ RSpec.describe RubyboyAdvance::Bus do
       RubyboyAdvance::Ppu.new(interrupt),
       RubyboyAdvance::Sram.new, interrupt,
       RubyboyAdvance::Timer.new(interrupt),
-      RubyboyAdvance::Keypad.new(interrupt)
+      RubyboyAdvance::Keypad.new(interrupt),
+      RubyboyAdvance::Apu.new
     )
   end
 
@@ -163,7 +164,7 @@ RSpec.describe RubyboyAdvance::Bus do
     def bus_with(rom, cartram)
       described_class.new(
         rom, [], RubyboyAdvance::Ppu.new(interrupt), cartram, interrupt,
-        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt), RubyboyAdvance::Apu.new
       )
     end
 
@@ -268,7 +269,7 @@ RSpec.describe RubyboyAdvance::Bus do
     let(:bus) do
       described_class.new(
         [0] * 4, [0] * 4, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt,
-        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt), RubyboyAdvance::Apu.new
       )
     end
 
@@ -308,6 +309,13 @@ RSpec.describe RubyboyAdvance::Bus do
       bus.write32(0x0800_0000, 0)
 
       expect([bus.take_cycles, bus.take_cycles]).to eq([11, 0])
+    end
+
+    it 'hands out at most the limit given to take_cycles and keeps the rest' do
+      bus.take_cycles
+      bus.idle(100)
+
+      expect([bus.take_cycles(64), bus.take_cycles(64), bus.take_cycles(64)]).to eq([64, 36, 0])
     end
 
     describe 'accesses that follow the last one' do

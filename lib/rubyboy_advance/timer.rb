@@ -31,6 +31,7 @@ module RubyboyAdvance
         while @counts[i] >= 0x10000
           @counts[i] -= 0x10000 - @reloads[i]
           overflows += 1
+          yield i if i < 2 # only timers 0 and 1 can clock the sound FIFOs
         end
         @interrupt.request(:"timer#{i}") if overflows > 0 && @settings[i][6] == 1
       end

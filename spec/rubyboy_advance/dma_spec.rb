@@ -12,7 +12,8 @@ RSpec.describe RubyboyAdvance::Dma do
       RubyboyAdvance::Sram.new,
       interrupt,
       RubyboyAdvance::Timer.new(interrupt),
-      RubyboyAdvance::Keypad.new(interrupt)
+      RubyboyAdvance::Keypad.new(interrupt),
+      RubyboyAdvance::Apu.new
     )
   end
 
@@ -103,7 +104,7 @@ RSpec.describe RubyboyAdvance::Dma do
     let(:bus) do
       RubyboyAdvance::Bus.new(
         rom, [], ppu, RubyboyAdvance::Eeprom.new, interrupt,
-        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt), RubyboyAdvance::Apu.new
       )
     end
 
@@ -122,6 +123,70 @@ RSpec.describe RubyboyAdvance::Dma do
 
         expect(halfwords(0x0200_2000, 68)).to eq([0, 0, 0, 0] + data)
       end
+    end
+  end
+
+  describe 'for a sound FIFO' do
+    let(:source) { 0x0200_1000 }
+
+    before { 8.times { |i| bus.write32(source + (i * 4), 0x0101_0101 * (i + 1)) } } # word i is i + 1 in each byte
+
+    def words(addr, count) = Array.new(count) { |i| bus.read32(addr + (i * 4)) }
+
+    it 'waits for the FIFO, then copies four words to one address whatever the registers say' do
+      start(1, source, 0x0300_0000, 1, 0xB200) # start timing 3, repeat; count 1, halfwords, destination going up
+      expect(words(0x0300_0000, 1)).to eq([0])
+
+      bus.run_dma(:fifo_a)
+
+      expect(words(0x0300_0000, 2)).to eq([0x0404_0404, 0])
+    end
+
+    it 'goes on from where it stopped with repeat, four words again' do
+      start(1, source, 0x0300_0000, 1, 0xB200)
+
+      2.times { bus.run_dma(:fifo_a) }
+
+      expect(words(0x0300_0000, 2)).to eq([0x0808_0808, 0])
+      expect(bus.read16(0x0400_00C6)).to eq(0xB200)
+    end
+
+    it 'clears the enable bit after one refill without repeat' do
+      start(2, source, 0x0300_0000, 1, 0xB000)
+
+      2.times { bus.run_dma(:fifo_b) }
+
+      expect(words(0x0300_0000, 1)).to eq([0x0404_0404])
+      expect(bus.read16(0x0400_00D2)).to eq(0x3000)
+    end
+
+    it 'runs DMA1 for FIFO A only and DMA2 for FIFO B only' do
+      start(1, source, 0x0300_0000, 1, 0xB200)
+      start(2, source, 0x0300_0010, 1, 0xB200)
+
+      bus.run_dma(:fifo_b)
+      expect(words(0x0300_0000, 1) + words(0x0300_0010, 1)).to eq([0, 0x0404_0404])
+
+      bus.run_dma(:fifo_a)
+      expect(words(0x0300_0000, 1) + words(0x0300_0010, 1)).to eq([0x0404_0404, 0x0404_0404])
+    end
+
+    it 'leaves DMA0 and DMA3 with start timing 3 alone' do
+      start(0, source, 0x0300_0000, 1, 0xB200)
+      start(3, source, 0x0300_0010, 1, 0xB200)
+
+      %i[fifo_a fifo_b].each { bus.run_dma(it) }
+
+      expect(words(0x0300_0000, 1) + words(0x0300_0010, 1)).to eq([0, 0])
+    end
+
+    it 'counts the four words and two internal cycles' do
+      start(1, source, 0x0300_0000, 1, 0xB200)
+      bus.take_cycles
+
+      bus.run_dma(:fifo_a)
+
+      expect(bus.take_cycles).to eq((4 * (6 + 1)) + 2) # EWRAM to IWRAM
     end
   end
 

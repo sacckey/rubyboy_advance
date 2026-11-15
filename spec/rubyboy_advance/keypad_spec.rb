@@ -11,7 +11,8 @@ RSpec.describe RubyboyAdvance::Keypad do
       RubyboyAdvance::Sram.new,
       interrupt,
       RubyboyAdvance::Timer.new(interrupt),
-      keypad
+      keypad,
+      RubyboyAdvance::Apu.new
     )
   end
 

@@ -23,7 +23,7 @@ module RubyboyAdvance
     # 0x04000000-0x0400005F are the LCD registers, owned by the PPU.
     LCD_IO_SIZE = 0x60
 
-    def initialize(rom, bios, ppu, cartram, interrupt, timer, keypad)
+    def initialize(rom, bios, ppu, cartram, interrupt, timer, keypad, apu)
       @ewram = Array.new(0x40000, 0)
       @iwram = Array.new(0x8000, 0)
       @ioram = Array.new(0x400, 0)
@@ -38,6 +38,7 @@ module RubyboyAdvance
       @dma = Dma.new
       @timer = timer
       @keypad = keypad
+      @apu = apu
       @cycles = 0
       @next_addr = nil
       @nonseq16 = COSTS16.dup
@@ -47,9 +48,10 @@ module RubyboyAdvance
       update_wait_costs
     end
 
-    def take_cycles
-      cycles = @cycles
-      @cycles = 0
+    # At most limit of them; the rest stay for the next call
+    def take_cycles(limit = @cycles)
+      cycles = [@cycles, limit].min
+      @cycles -= cycles
       cycles
     end
 
@@ -96,7 +98,7 @@ module RubyboyAdvance
       raw_write32(addr, value)
     end
 
-    # Runs the DMA channels waiting for :vblank or :hblank, which the PPU yields from step
+    # Runs the DMA channels waiting for timing: :vblank or :hblank from the PPU, :fifo_a or :fifo_b from the APU
     def run_dma(timing)
       @dma.trigger(timing, self)
     end
@@ -118,6 +120,7 @@ module RubyboyAdvance
 
         case offset
         when 0x100..0x10F then return @timer.read(offset)
+        when 0x060..0x09F then return @apu.read(offset)
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then return @interrupt.read(offset)
         when 0x0B0..0x0DF then return @dma.read(offset)
         when 0x130, 0x131 then return @keypad.read(offset)
@@ -218,6 +221,7 @@ module RubyboyAdvance
 
         case offset
         when 0x100..0x10F then @timer.write(offset, value)
+        when 0x060..0x0A7 then @apu.write(offset, value)
         when 0x130, 0x131 then nil
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
         when 0x204, 0x205

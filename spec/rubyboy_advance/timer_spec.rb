@@ -3,6 +3,7 @@
 RSpec.describe RubyboyAdvance::Timer do
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
   let(:timer) { described_class.new(interrupt) }
+  let(:overflowed) { [] }
   let(:bus) do
     RubyboyAdvance::Bus.new(
       [],
@@ -11,7 +12,8 @@ RSpec.describe RubyboyAdvance::Timer do
       RubyboyAdvance::Sram.new,
       interrupt,
       timer,
-      RubyboyAdvance::Keypad.new(interrupt)
+      RubyboyAdvance::Keypad.new(interrupt),
+      RubyboyAdvance::Apu.new
     )
   end
 
@@ -22,7 +24,9 @@ RSpec.describe RubyboyAdvance::Timer do
 
   def counter(index) = bus.read16(0x0400_0100 + (index * 4))
   def requested = bus.read16(0x0400_0202)
-  def run(cycles) = cycles.times { timer.step(1) }
+  # The block hears of each overflow of timers 0 and 1, which exe passes on to the APU
+  def step(cycles) = timer.step(cycles) { overflowed << it }
+  def run(cycles) = cycles.times { step(1) }
 
   describe 'registers' do
     it 'starts from the reload value and reads back the counter' do
@@ -102,7 +106,7 @@ RSpec.describe RubyboyAdvance::Timer do
 
     it 'keeps the cycles past an overflow' do
       start(0, 0xFFFE, 0x80)
-      timer.step(3)
+      step(3)
 
       expect(counter(0)).to eq(0xFFFF)
     end
@@ -110,9 +114,34 @@ RSpec.describe RubyboyAdvance::Timer do
     it 'handles every overflow in one step' do
       start(0, 0xFFFE, 0x80)
       start(1, 0, 0x84)
-      timer.step(4)
+      step(4)
 
       expect([counter(0), counter(1)]).to eq([0xFFFE, 2])
+    end
+  end
+
+  describe 'overflows for the sound FIFOs' do
+    it 'yields the timer once for each overflow' do
+      start(0, 0xFFFE, 0x80)
+      step(5)
+
+      expect(overflowed).to eq([0, 0])
+    end
+
+    it 'yields timer 1 when counting up makes it overflow' do
+      start(0, 0xFFFF, 0x80)
+      start(1, 0xFFFF, 0x84)
+      step(1)
+
+      expect(overflowed).to eq([0, 1])
+    end
+
+    it 'does not yield timers 2 and 3' do
+      start(2, 0xFFFF, 0x80)
+      start(3, 0xFFFF, 0x80)
+      step(2)
+
+      expect(overflowed).to eq([])
     end
   end
 
@@ -165,7 +194,7 @@ RSpec.describe RubyboyAdvance::Timer do
       start(0, 0, 0x80)
       start(1, 0, 0x84)
       start(2, 0, 0x80)
-      timer.step(3)
+      step(3)
 
       expect(counter(2)).to eq(3)
     end

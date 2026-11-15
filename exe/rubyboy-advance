@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require 'rubyboy_advance'
+require 'rubyboy_advance/audio'
 require 'rubyboy_advance/lcd'
 
 abort "Usage: #{File.basename($PROGRAM_NAME)} BIOS_PATH ROM_PATH" unless ARGV.size == 2
@@ -20,15 +21,19 @@ interrupt = RubyboyAdvance::Interrupt.new
 ppu = RubyboyAdvance::Ppu.new(interrupt)
 timer = RubyboyAdvance::Timer.new(interrupt)
 keypad = RubyboyAdvance::Keypad.new(interrupt)
-bus = RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer, keypad)
+apu = RubyboyAdvance::Apu.new
+bus = RubyboyAdvance::Bus.new(rom, bios, ppu, cartram, interrupt, timer, keypad, apu)
 cpu = RubyboyAdvance::Cpu.new(bus)
 lcd = RubyboyAdvance::Lcd.new
+audio = RubyboyAdvance::Audio.new
 begin
   loop do
     cycles = cpu.exec
-    timer.step(cycles)
+    timer.step(cycles) { |id| apu.timer_overflow(id) { |timing| bus.run_dma(timing) } }
+    apu.step(cycles)
     next unless ppu.step(cycles) { |timing| bus.run_dma(timing) }
 
+    audio.queue(apu.take_samples)
     lcd.draw(ppu.buffer)
     break if lcd.window_should_close?
 

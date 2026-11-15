@@ -11,7 +11,8 @@ RSpec.describe RubyboyAdvance::Cpu do
       RubyboyAdvance::Sram.new,
       interrupt,
       RubyboyAdvance::Timer.new(interrupt),
-      RubyboyAdvance::Keypad.new(interrupt)
+      RubyboyAdvance::Keypad.new(interrupt),
+      RubyboyAdvance::Apu.new
     )
   end
   let(:cpu) { described_class.new(bus) }
@@ -222,6 +223,12 @@ RSpec.describe RubyboyAdvance::Cpu do
       bus.read32(0x0200_0000) # stands in for an HBlank DMA
 
       expect([cpu.exec, regs[15], cpu.exec, regs[15]]).to eq([6, 0x0800_0000, 8 + 6 + 6, 0x0800_0004])
+    end
+
+    it 'hands back the time of a long DMA 64 cycles at a time, and then goes on' do
+      bus.idle(150)
+
+      expect([Array.new(4) { cpu.exec }, regs[15]]).to eq([[64, 64, 22, 8 + 6 + 6], 0x0800_0004])
     end
 
     context 'when it takes an IRQ' do
