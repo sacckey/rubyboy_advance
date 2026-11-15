@@ -45,6 +45,44 @@ RSpec.describe RubyboyAdvance::Apu do
     end
   end
 
+  describe 'SOUNDBIAS' do
+    it 'starts at 0x200' do
+      expect(bus.read16(0x0400_0088)).to eq(0x200)
+    end
+
+    it 'reads back its level, without bit 0, and its sampling bits' do
+      bus.write16(0x0400_0088, 0xFFFF)
+
+      expect(bus.read16(0x0400_0088)).to eq(0xC3FE)
+    end
+
+    it 'keeps its value when the master enable goes off, and takes writes while it is off' do
+      bus.write16(0x0400_0088, 0x4100)
+      bus.write16(0x0400_0084, 0)
+      expect(bus.read16(0x0400_0088)).to eq(0x4100)
+
+      bus.write16(0x0400_0088, 0x8302)
+      bus.write16(0x0400_0084, 0x80)
+
+      expect(bus.read16(0x0400_0088)).to eq(0x8302)
+    end
+
+    # FIFO A plays 1, then -127, at full volume: 4, then -508
+    {
+      0x200 => [4, -508],
+      0x100 => [4 - 0x100, -0x200],
+      0x3FE => [0x1FF, -508 + 0x1FE],
+      0xC200 => [4, -508]
+    }.each do |bias, expected|
+      it "adds the level of #{format('%#x', bias)}, keeps the sum within 0 to 0x3FF, and takes 0x200 away" do
+        bus.write16(0x0400_0088, bias)
+        bus.write32(0x0400_00A0, 0x8101)
+
+        expect([play, play]).to eq(expected.map { [it, it] })
+      end
+    end
+  end
+
   describe 'samples' do
     it 'makes one for each side every 512 cycles' do
       apu.step(511)

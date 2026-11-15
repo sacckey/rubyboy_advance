@@ -119,7 +119,7 @@ module RubyboyAdvance
 
         case offset
         when 0x100..0x10F then return @timer.read(offset)
-        when 0x060..0x084, 0x090..0x09F then return @apu.read(offset)
+        when 0x060..0x09F then return @apu.read(offset)
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then return @interrupt.read(offset)
         when 0x0B0..0x0DF then return @dma.read(offset)
         when 0x130, 0x131 then return @keypad.read(offset)
@@ -220,7 +220,7 @@ module RubyboyAdvance
 
         case offset
         when 0x100..0x10F then @timer.write(offset, value)
-        when 0x060..0x084, 0x090..0x0A7 then @apu.write(offset, value)
+        when 0x060..0x0A7 then @apu.write(offset, value)
         when 0x130, 0x131 then nil
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
         when 0x204, 0x205

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module RubyboyAdvance
-  # ponytail: samples at a fixed 32768 Hz, and the PSG channels catch up once a sample; no SOUNDBIAS yet
+  # ponytail: samples at a fixed 32768 Hz, not the rate SOUNDBIAS asks for, and the PSG channels catch up once a sample
   class Apu
     CYCLES_PER_SAMPLE = 512
     FIFO_WORDS = 7 # NanoBoyAdvance fifo.hh
@@ -18,6 +18,7 @@ module RubyboyAdvance
     def initialize
       @cnt_l = 0
       @cnt_h = 0
+      @bias = 0x200 # as the BIOS leaves it
       @enabled = false
       @fifos = [[], []]
       @writing = [0, 0]
@@ -80,6 +81,8 @@ module RubyboyAdvance
       when 0x082 then @cnt_h & 0xFF
       when 0x083 then @cnt_h >> 8
       when 0x084 then (@enabled ? 0x80 : 0) | @psg.each_with_index.sum { |channel, i| channel.enabled? ? 1 << i : 0 }
+      when 0x088 then @bias & 0xFF
+      when 0x089 then @bias >> 8
       when 0x090..0x09F then @psg[2].read_ram(offset & 0xF)
       else 0
       end
@@ -104,6 +107,8 @@ module RubyboyAdvance
         @fifos.each(&:clear)
         @cnt_l = 0
         reset_psg
+      when 0x088 then @bias = (@bias & 0xFF00) | (value & 0xFE)
+      when 0x089 then @bias = (@bias & 0xFF) | ((value & 0xC3) << 8)
       when 0x090..0x09F then @psg[2].write_ram(offset & 0xF, value)
       when 0x0A0..0x0A7 then write_fifo(offset, value) if @enabled
       end
@@ -136,7 +141,7 @@ module RubyboyAdvance
       2.times do |i|
         level += @latches[i] << (1 + @cnt_h[2 + i]) if @cnt_h[8 + side + (i * 4)] == 1
       end
-      level.clamp(-0x200, 0x1FF) << 6
+      ((level + (@bias & 0x3FF)).clamp(0, 0x3FF) - 0x200) << 6
     end
   end
 end

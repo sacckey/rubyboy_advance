@@ -661,6 +661,12 @@ RSpec.describe RubyboyAdvance::Psg do
       expect(levels).to eq([0x1FF] * 2) # 120 + 508
     end
 
+    it 'puts the SOUNDBIAS level under the PSG too' do
+      bus.write16(0x0400_0088, 0x180)
+
+      expect(levels).to eq([120 - 0x80] * 2)
+    end
+
     it 'is not disturbed when the master enable is written again while it is on' do
       bus.write16(0x0400_0084, 0x80)
 
