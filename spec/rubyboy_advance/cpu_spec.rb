@@ -20,9 +20,11 @@ RSpec.describe RubyboyAdvance::Cpu do
   def cpsr = cpu.instance_variable_get(:@cpsr)
   def spsr_irq = cpu.instance_variable_get(:@spsrs)[:irq]
 
+  # exec hands back cycles left on the bus before it runs anything, so setup that writes through the bus takes them
   def request_vblank
     bus.write16(0x0400_0200, 1) # IE: VBlank
     bus.write16(0x0400_0208, 1) # IME on
+    bus.take_cycles
     interrupt.request(:vblank)
   end
 
@@ -30,6 +32,7 @@ RSpec.describe RubyboyAdvance::Cpu do
   def return_from_irq
     bus.write16(0x0400_0202, 1)
     bus.write32(0x0300_0000, 0xE25EF004)
+    bus.take_cycles
     regs[15] = 0x0300_0000
     cpu.exec
   end
@@ -83,6 +86,7 @@ RSpec.describe RubyboyAdvance::Cpu do
     # Stands in for the BIOS: return with movs pc, lr from IWRAM
     def return_from_swi
       bus.write32(0x0300_0000, 0xE1B0F00E)
+      bus.take_cycles
       regs[15] = 0x0300_0000
       cpu.exec
     end
@@ -125,6 +129,7 @@ RSpec.describe RubyboyAdvance::Cpu do
       regs[0] = 0x01             # bit 7 clear: Halt (bits 0-6 are unused)
       regs[1] = 0x0400_0301      # HALTCNT
       bus.write16(0x0400_0200, 1) # IE: VBlank, with IME left off
+      bus.take_cycles
     end
 
     context 'when written from the BIOS' do
@@ -138,11 +143,11 @@ RSpec.describe RubyboyAdvance::Cpu do
         expect([cpu.exec, cpu.exec]).to eq([1, 1])
       end
 
-      it 'drops the cycles of a transfer that ran while it was stopped' do
+      it 'passes on the cycles of a transfer that ran while it was stopped, and stays stopped' do
         cpu.exec
         bus.read32(0x0200_0000) # stands in for an HBlank DMA
 
-        expect([cpu.exec, bus.take_cycles]).to eq([1, 0])
+        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 1, 0x04])
       end
 
       it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
@@ -161,6 +166,7 @@ RSpec.describe RubyboyAdvance::Cpu do
         interrupt.request(:vblank)
         cpu.exec
         bus.write16(0x0400_0202, 1) # clear IF
+        bus.take_cycles
         cpu.exec
 
         expect(regs[15]).to eq(0x0C)
@@ -209,6 +215,47 @@ RSpec.describe RubyboyAdvance::Cpu do
         regs[1] = 0x0800_0010
 
         expect(cpu.exec).to eq(8 + 6 + 6 + 8 + 6 + 1)
+      end
+    end
+
+    it 'hands back the cycles a DMA left on the bus before it runs anything' do
+      bus.read32(0x0200_0000) # stands in for an HBlank DMA
+
+      expect([cpu.exec, regs[15], cpu.exec, regs[15]]).to eq([6, 0x0800_0000, 8 + 6 + 6, 0x0800_0004])
+    end
+
+    context 'when it takes an IRQ' do
+      let(:bios) { nop * 16 }
+
+      before do
+        bus.write16(0x0400_0200, 1) # IE: VBlank
+        bus.write16(0x0400_0208, 1) # IME on
+        bus.take_cycles
+      end
+
+      it 'reads one more opcode where it was, then three at the vector' do
+        cpu.exec
+        interrupt.request(:vblank)
+
+        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 3, 0x1C])
+      end
+
+      it 'reads the three opcodes that a jump before it still owed' do
+        interrupt.request(:vblank)
+
+        expect([cpu.exec, cpu.exec]).to eq([8 + 6 + 6, 3])
+      end
+
+      context 'from Thumb' do
+        let(:rom) { [0xC0, 0x46] * 8 } # mov r8, r8
+
+        it 'reads a halfword where it was' do
+          cpu.instance_variable_set(:@cpsr, 0x3F)
+          cpu.exec
+          interrupt.request(:vblank)
+
+          expect([cpu.exec, cpu.exec]).to eq([3, 3])
+        end
       end
     end
 
@@ -340,6 +387,7 @@ RSpec.describe RubyboyAdvance::Cpu do
 
     def run_arm(*opcodes)
       opcodes.each_with_index { |opcode, i| bus.write32(base + (i * 4), opcode) }
+      bus.take_cycles
       regs[15] = base
       opcodes.size.times { cpu.exec }
     end
@@ -401,6 +449,7 @@ RSpec.describe RubyboyAdvance::Cpu do
     describe 'in Thumb' do
       def run_thumb(*opcodes)
         opcodes.each_with_index { |opcode, i| bus.write16(base + (i * 2), opcode) }
+        bus.take_cycles
         regs[15] = base
         cpu.instance_variable_set(:@cpsr, 0x3F)
         opcodes.size.times { cpu.exec }

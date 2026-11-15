@@ -35,10 +35,11 @@ module RubyboyAdvance
     end
 
     def exec
-      if @interrupt.cpu_halted?
-        @bus.take_cycles # a DMA that ran meanwhile cost the stopped CPU nothing
-        return 1
-      end
+      # A DMA since the last call held the bus, so its time passes before anything else runs
+      cycles = @bus.take_cycles
+      return cycles if cycles > 0
+
+      return 1 if @interrupt.cpu_halted?
 
       run_instruction
       @bus.take_cycles
@@ -58,6 +59,7 @@ module RubyboyAdvance
       @regs[15] &= flag_t ? ~1 : ~3
 
       if @interrupt.irq? && @cpsr[7] == 0
+        fetch(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
         @spsrs[:irq] = @cpsr
         update_banked_regs(:irq)
         self.lr = pc + 4
