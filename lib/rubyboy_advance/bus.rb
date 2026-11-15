@@ -48,9 +48,10 @@ module RubyboyAdvance
       update_wait_costs
     end
 
-    def take_cycles
-      cycles = @cycles
-      @cycles = 0
+    # At most limit of them; the rest stay for the next call
+    def take_cycles(limit = @cycles)
+      cycles = [@cycles, limit].min
+      @cycles -= cycles
       cycles
     end
 

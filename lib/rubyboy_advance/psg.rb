@@ -151,18 +151,23 @@ module RubyboyAdvance
         @phase = 0
         @shadow_freq = @freq
         @sweep_step = @sweep_divider
+        @enabled = false if @sweep_shift != 0 && swept_freq > 2047
       end
 
-      # Moves the frequency by a fraction of itself; a result past 2047 stops the channel. A period of 0 never comes due
+      def swept_freq = @shadow_freq + ((@shadow_freq >> @sweep_shift) * (@sweep_down ? -1 : 1))
+
+      # Moves the frequency by a fraction of itself; a result past 2047 stops the channel. A period of 0 never comes due.
+      # The move after it is worked out at once and checked too, but not kept, as at the trigger (mGBA gb/audio.c)
       def sweep_past_top?
         return false unless (@sweep_step -= 1) == 0
 
         @sweep_step = @sweep_divider
-        freq = @shadow_freq + ((@shadow_freq >> @sweep_shift) * (@sweep_down ? -1 : 1))
+        freq = swept_freq
         return true if freq > 2047
+        return false if @sweep_shift == 0
 
-        @freq = @shadow_freq = freq if @sweep_shift != 0
-        false
+        @freq = @shadow_freq = freq
+        swept_freq > 2047
       end
     end
 

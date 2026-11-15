@@ -311,6 +311,13 @@ RSpec.describe RubyboyAdvance::Bus do
       expect([bus.take_cycles, bus.take_cycles]).to eq([11, 0])
     end
 
+    it 'hands out at most the limit given to take_cycles and keeps the rest' do
+      bus.take_cycles
+      bus.idle(100)
+
+      expect([bus.take_cycles(64), bus.take_cycles(64), bus.take_cycles(64)]).to eq([64, 36, 0])
+    end
+
     describe 'accesses that follow the last one' do
       {
         'the ROM' => [0x0800_0000, 3, 6],

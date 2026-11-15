@@ -20,6 +20,8 @@ module RubyboyAdvance
       end
     end.freeze
 
+    MAX_STEP = 64 # cycles
+
     def initialize(bus)
       @regs = Array.new(16, 0)
       self.sp = 0x0300_7F00
@@ -35,14 +37,15 @@ module RubyboyAdvance
     end
 
     def exec
-      # A DMA since the last call held the bus, so its time passes before anything else runs
-      cycles = @bus.take_cycles
+      # The bus may still hold time: a DMA ran since the last call, or the last instruction started one.
+      # It passes first, a step at a time, so that the timers and the sound stay in order through it
+      cycles = @bus.take_cycles(MAX_STEP)
       return cycles if cycles > 0
 
       return 1 if @interrupt.cpu_halted?
 
       run_instruction
-      @bus.take_cycles
+      @bus.take_cycles(MAX_STEP)
     end
 
     # Whether the instruction being executed is in the BIOS (0x0000-0x3FFF).

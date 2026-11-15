@@ -225,6 +225,12 @@ RSpec.describe RubyboyAdvance::Cpu do
       expect([cpu.exec, regs[15], cpu.exec, regs[15]]).to eq([6, 0x0800_0000, 8 + 6 + 6, 0x0800_0004])
     end
 
+    it 'hands back the time of a long DMA 64 cycles at a time, and then goes on' do
+      bus.idle(150)
+
+      expect([Array.new(4) { cpu.exec }, regs[15]]).to eq([[64, 64, 22, 8 + 6 + 6], 0x0800_0004])
+    end
+
     context 'when it takes an IRQ' do
       let(:bios) { nop * 16 }
 

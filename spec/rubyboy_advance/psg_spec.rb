@@ -340,14 +340,31 @@ RSpec.describe RubyboyAdvance::Psg do
       expect(step_samples).to eq(64 - (576 / 32))
     end
 
-    it 'stops the channel when a later frequency would pass 2047' do
-      start_sweep(0x11, 1024) # 1536, then 2304
-      play(192 + 255)
+    { 1638 => true, 1639 => false }.each do |freq, plays|
+      it "#{plays ? 'starts' : 'does not start'} at #{freq}, from which the first new frequency would be #{freq + (freq >> 2)}" do
+        start_sweep(0x12, freq)
+
+        expect(playing?(0)).to be(plays)
+      end
+    end
+
+    { 1618 => true, 1619 => false }.each do |freq, plays|
+      it "#{plays ? 'goes on' : 'stops'} right after a change from #{freq}, when the next one would be #{(freq * 9 / 8) * 9 / 8}" do
+        start_sweep(0x13, freq)
+        play(191)
+        expect(playing?(0)).to be(true)
+
+        play(1)
+
+        expect(playing?(0)).to be(plays)
+      end
+    end
+
+    it 'does not look ahead when it goes down' do
+      start_sweep(0x19, 2047)
+      play(192)
+
       expect(playing?(0)).to be(true)
-
-      play(1)
-
-      expect(playing?(0)).to be(false)
     end
 
     it 'leaves the frequency with a shift of 0' do

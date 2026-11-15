@@ -205,6 +205,67 @@ RSpec.describe RubyboyAdvance::Apu do
     end
   end
 
+  describe 'through a long DMA' do
+    let(:bus) do
+      RubyboyAdvance::Bus.new(
+        rom, [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt,
+        timer, RubyboyAdvance::Keypad.new(interrupt), apu
+      )
+    end
+    let(:cpu) { RubyboyAdvance::Cpu.new(bus) }
+
+    # The samples exe would make, in units of a FIFO byte
+    def run_until(count)
+      samples = []
+      while samples.size < count * 2
+        cycles = cpu.exec
+        step(cycles)
+        apu.step(cycles)
+        samples.concat(apu.take_samples)
+      end
+      samples.each_slice(2).map { |left, _| left / 64 / 4 }
+    end
+
+    # DMA3: 1024 words within IWRAM, 2050 cycles, while FIFO A plays a byte every 512 cycles, half-way between samples
+    before do
+      bus.write32(0x0400_00A0, 0x0403_0201)
+      bus.write16(0x0400_0102, 0)
+      bus.write16(0x0400_0100, 0x10000 - 256)
+      bus.write16(0x0400_0102, 0x80)
+      bus.write16(0x0400_0100, 0x10000 - 512)
+      bus.write32(0x0400_00D4, 0x0300_0000)
+      bus.write32(0x0400_00D8, 0x0300_4000)
+      bus.write16(0x0400_00DC, 1024)
+      bus.take_cycles
+    end
+
+    context 'that an instruction starts' do
+      let(:rom) do
+        [
+          0xE3A00301, # mov r0, #0x04000000
+          0xE28000DE, # add r0, r0, #0xDE
+          0xE3A01B21, # mov r1, #0x8400
+          0xE1C010B0, # strh r1, [r0]: DMA3CNT_H, at once
+          0xEAFFFFFE  # b .
+        ].pack('V*').bytes
+      end
+
+      it 'makes each sample from the byte played by then' do
+        expect(run_until(4)).to eq([1, 2, 3, 4])
+      end
+    end
+
+    context 'that ran between two instructions, as one at HBlank does' do
+      let(:rom) { [0xEAFFFFFE].pack('V').bytes } # b .
+
+      it 'makes each sample from the byte played by then' do
+        bus.write16(0x0400_00DE, 0x8400)
+
+        expect(run_until(4)).to eq([1, 2, 3, 4])
+      end
+    end
+  end
+
   describe 'the master enable' do
     it 'ignores FIFO writes while it is off' do
       bus.write16(0x0400_0084, 0)
