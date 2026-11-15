@@ -9,6 +9,7 @@ module RubyboyAdvance
       @size_known = false
       @reading = false
       @address = 0
+      @incoming = Array.new(8, 0)
       start(:command)
     end
 
@@ -35,9 +36,10 @@ module RubyboyAdvance
     def write_bit(bit)
       return if @state == :sending
 
-      @bits = (@bits << 1) | (bit & 1)
       @count += 1
+      return write_data_bit(bit) if @state == :data
 
+      @bits = (@bits << 1) | (bit & 1)
       case @state
       when :command
         return unless @count == 2
@@ -49,11 +51,6 @@ module RubyboyAdvance
 
         @address = (@bits * 8) & 0x1FFF
         start(@reading ? :end_bit : :data)
-      when :data
-        return unless @count == 64
-
-        8.times { |i| @data[@address + i] = (@bits >> (56 - (i * 8))) & 0xFF }
-        start(:end_bit)
       when :end_bit
         start(@reading ? :sending : :command)
       end
@@ -65,6 +62,16 @@ module RubyboyAdvance
     def write(_addr, _value) = nil
 
     private
+
+    # The block is stored only when all 64 bits have come
+    def write_data_bit(bit)
+      i = (@count - 1) >> 3
+      @incoming[i] = ((@incoming[i] << 1) | (bit & 1)) & 0xFF
+      return unless @count == 64
+
+      8.times { |n| @data[@address + n] = @incoming[n] }
+      start(:end_bit)
+    end
 
     def start(state)
       @state = state

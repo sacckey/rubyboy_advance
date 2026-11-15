@@ -1,6 +1,7 @@
 /.bundle/
 /pkg/
 /tmp/
+/build/
 
 .DS_Store
 

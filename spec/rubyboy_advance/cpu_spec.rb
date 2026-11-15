@@ -388,6 +388,146 @@ RSpec.describe RubyboyAdvance::Cpu do
     end
   end
 
+  # Written so that no value passes 64 bits, which the expectations here work out with numbers of any size
+  describe 'arithmetic' do
+    let(:rom) { [] }
+    let(:base) { 0x0300_0000 }
+
+    def run(opcode, thumb: false)
+      thumb ? bus.write16(base, opcode) : bus.write32(base, opcode)
+      cpu.instance_variable_set(:@cpsr, cpsr | 0x20) if thumb
+      regs[15] = base
+      bus.take_cycles
+      cpu.exec
+    end
+
+    def s32(n) = n[31] == 1 ? n - 0x1_0000_0000 : n
+    def words(n) = [(n >> 32) & 0xFFFF_FFFF, n & 0xFFFF_FFFF]
+
+    describe 'multiply' do
+      [
+        [0xFFFF_FFFF, 0xFFFF_FFFF], [0x8000_0000, 0x8000_0000], [0x7FFF_FFFF, 0xFFFF_FFFF], [0x1234_5678, 0x9ABC_DEF0],
+        [0x0001_FFFF, 0x0001_FFFF], [0xFFFF, 0x0001_0001], [0, 0xFFFF_FFFF]
+      ].each do |x, y|
+        context format('of %<x>#010x by %<y>#010x', x:, y:) do
+          before do
+            regs[0] = 0x5555_5555 # mul does not add what its Rn field names
+            regs[1] = x
+            regs[2] = y
+            regs[3] = 0x89AB_CDEF
+          end
+
+          it 'gives the low word for mul, and adds a register for mla' do
+            run(0xE0000291) # mul r0, r1, r2
+            expect(regs[0]).to eq((x * y) & 0xFFFF_FFFF)
+
+            run(0xE0203291) # mla r0, r1, r2, r3
+            expect(regs[0]).to eq(((x * y) + 0x89AB_CDEF) & 0xFFFF_FFFF)
+          end
+
+          it 'gives the low word for the Thumb mul' do
+            regs[0] = y
+            run(0x4348, thumb: true) # mul r0, r1
+
+            expect(regs[0]).to eq((x * y) & 0xFFFF_FFFF)
+          end
+
+          it 'gives both words for umull, and for smull with the signs' do
+            run(0xE0854291) # umull r4, r5, r1, r2
+            expect([regs[5], regs[4]]).to eq(words(x * y))
+
+            run(0xE0C54291) # smull r4, r5, r1, r2
+            expect([regs[5], regs[4]]).to eq(words(s32(x) * s32(y)))
+          end
+
+          [[0xFFFF_FFFF, 0xFFFF_FFFF], [0x1234_5678, 0x9ABC_DEF0], [0, 0]].each do |high, low|
+            it format('adds the product to %<high>#010x %<low>08x for umlal and smlal', high:, low:) do
+              regs[5] = high
+              regs[4] = low
+              run(0xE0A54291) # umlal r4, r5, r1, r2
+              expect([regs[5], regs[4]]).to eq(words((x * y) + (high << 32) + low))
+
+              regs[5] = high
+              regs[4] = low
+              run(0xE0E54291) # smlal r4, r5, r1, r2
+              expect([regs[5], regs[4]]).to eq(words((s32(x) * s32(y)) + (high << 32) + low))
+            end
+          end
+        end
+      end
+
+      {
+        'umulls of 1 by 1' => [0xE0954291, 1, 1, [0, 0]],
+        'umulls of 0x10000 by 0x10000, where only the low word is 0' => [0xE0954291, 0x1_0000, 0x1_0000, [0, 0]],
+        'umulls of 0 by 5' => [0xE0954291, 0, 5, [0, 1]],
+        'umulls of 0xffffffff by itself, where bit 31 of the low word is clear' => [0xE0954291, 0xFFFF_FFFF, 0xFFFF_FFFF, [1, 0]],
+        'smulls of -1 by 1' => [0xE0D54291, 0xFFFF_FFFF, 1, [1, 0]],
+        'smulls of -1 by -1' => [0xE0D54291, 0xFFFF_FFFF, 0xFFFF_FFFF, [0, 0]]
+      }.each do |name, (opcode, x, y, flags)|
+        it "sets N and Z to #{flags.join(' and ')} for #{name}" do
+          regs[1] = x
+          regs[2] = y
+          run(opcode)
+
+          expect([cpsr[31], cpsr[30]]).to eq(flags)
+        end
+      end
+    end
+
+    describe 'a shift by a register' do
+      # The result and the carry, as shifts of numbers of any size give them
+      def wide(shift, x, n)
+        case shift
+        when 'lsl' then [(x << n) & 0xFFFF_FFFF, (x << n)[32]]
+        when 'lsr' then [x >> n, x[n - 1]]
+        when 'asr' then [(s32(x) >> n) & 0xFFFF_FFFF, s32(x)[n - 1]]
+        when 'ror'
+          result = ((x >> (n % 32)) | (x << (32 - (n % 32)))) & 0xFFFF_FFFF
+          [result, result[31]]
+        end
+      end
+
+      { 'lsl' => 0xE1B00211, 'lsr' => 0xE1B00231, 'asr' => 0xE1B00251, 'ror' => 0xE1B00271 }.each do |shift, opcode|
+        [1, 2, 31, 32, 33, 63, 64, 65, 255].each do |n|
+          it "gives the result and the carry of #{shift} by #{n}" do
+            values = [0x8000_0001, 0x7FFF_FFFE, 0xFFFF_FFFF, 0x4000_0002, 1]
+            got = values.map do |x|
+              regs[1] = x
+              regs[2] = n
+              run(opcode) # movs r0, r1, <shift> r2
+              [regs[0], cpsr[29]]
+            end
+
+            expect(got).to eq(values.map { wide(shift, it, n) })
+          end
+        end
+      end
+    end
+
+    describe 'r8 to r12' do
+      def switch_to(mode)
+        regs[0] = mode
+        run(0xE129F000) # msr cpsr_fc, r0
+      end
+
+      it 'has a set of its own in FIQ mode and one that the other modes share' do
+        5.times { |i| regs[8 + i] = 0x100 + i }
+        switch_to(0x11) # FIQ
+        expect(regs[8, 5]).to eq([0] * 5)
+
+        5.times { |i| regs[8 + i] = 0x200 + i }
+        switch_to(0x12) # IRQ
+        expect(regs[8, 5]).to eq([0x100, 0x101, 0x102, 0x103, 0x104])
+
+        switch_to(0x1F) # System
+        expect([regs[7], regs[8, 5]]).to eq([0, [0x100, 0x101, 0x102, 0x103, 0x104]])
+
+        switch_to(0x11)
+        expect(regs[8, 5]).to eq([0x200, 0x201, 0x202, 0x203, 0x204])
+      end
+    end
+  end
+
   describe 'prefetch' do
     let(:rom) { [] }
     let(:base) { 0x0300_0000 }

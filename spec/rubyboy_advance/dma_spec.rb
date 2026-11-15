@@ -65,6 +65,20 @@ RSpec.describe RubyboyAdvance::Dma do
     end
   end
 
+  it 'takes both bytes of the count' do
+    start(3, 0x0200_0000, 0x0201_0000, 0x0102, 0x8100)
+
+    expect(halfwords(0x0201_0000 + (0x0101 * 2), 2)).to eq([0x1111, 0])
+  end
+
+  it 'keeps the source fixed in the cartridge RAM, past the ROM' do
+    [0x12, 0x34, 0x56, 0x78].each_with_index { |byte, i| bus.write(0x0E00_0000 + i, byte) }
+
+    start(3, 0x0E00_0000, 0x0300_0000, 2, 0x8100)
+
+    expect(halfwords(0x0300_0000, 2)).to eq([0x1212, 0x1212])
+  end
+
   it 'ignores source bits above 28 on DMA3' do
     start(3, 0x1200_0000, 0x0300_0000, 1, 0x8000)
 
@@ -258,6 +272,14 @@ RSpec.describe RubyboyAdvance::Dma do
 
       expect(halfwords(0x0300_0000, 4)).to eq([0x1111, 0x2222, 0x3333, 0])
       expect(bus.read16(0x0400_00BA)).to eq(0x1000)
+    end
+
+    it 'starts every channel that waits for VBlank, DMA3 too' do
+      4.times { |channel| start(channel, 0x0200_0000 + (channel * 2), 0x0300_0000 + (channel * 2), 1, 0x9000) }
+
+      step(1232 * 160)
+
+      expect(halfwords(0x0300_0000, 4)).to eq([0x1111, 0x2222, 0x3333, 0x4444])
     end
 
     it 'copies at the HBlank of each visible line, going on from where it stopped' do

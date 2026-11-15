@@ -51,6 +51,11 @@ compiled the hot code. The checksum depends only on the BIOS, the ROM and the to
 `--warmup-frames` and `--frames`. If a change that should only make things faster alters it, it has
 changed what is emulated.
 
+## Spinel
+
+[Spinel](https://github.com/matz/spinel) compiles the emulator and the benchmark into native
+executables. See [spinel/README.md](spinel/README.md).
+
 ## Test ROMs
 
 The test ROMs from [jsmolka/gba-tests](https://github.com/jsmolka/gba-tests) are not in the

@@ -30,6 +30,12 @@ RSpec.describe RubyboyAdvance::Eeprom do
     expect([bits.first(4), to_bytes(bits.drop(4))]).to eq([[0, 0, 0, 0], bytes])
   end
 
+  it 'takes only bit 0 of each value written' do
+    send_bits(([1, 0] + address_bits(5, 14) + data_bits(bytes) + [0]).map { it | 0xFFFE })
+
+    expect(to_bytes(read_block(5).drop(4))).to eq(bytes)
+  end
+
   it 'reads 0xFF from blocks never written' do
     write_block(5, bytes)
 
