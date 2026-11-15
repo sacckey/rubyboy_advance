@@ -413,6 +413,34 @@ RSpec.describe RubyboyAdvance::Cpu do
     def s32(n) = n[31] == 1 ? n - 0x1_0000_0000 : n
     def words(n) = [(n >> 32) & 0xFFFF_FFFF, n & 0xFFFF_FFFF]
 
+    { 'movs of 0' => [0xE3B00000, [0, 1]], 'movs of 1' => [0xE3B00001, [0, 0]], 'mvns of 0' => [0xE3F00000, [1, 0]] }.each do |name, (opcode, flags)|
+      it "sets N and Z to #{flags.join(' and ')} for #{name}, whatever they were" do
+        got = [0x1F, 0xC000_001F].map do |before|
+          cpu.instance_variable_set(:@cpsr, before)
+          run(opcode)
+          [cpsr[31], cpsr[30]]
+        end
+
+        expect(got).to eq([flags, flags])
+      end
+    end
+
+    it 'reads r15 as the address of the instruction + 4 in Thumb' do
+      run(0x4678, thumb: true) # mov r0, pc
+
+      expect(regs[0]).to eq(base + 4)
+    end
+
+    it 'moves the base of stmdb down by a word for each register of the list' do
+      regs[7] = 0x77
+      regs[8] = 0x88
+      regs[13] = 0x0300_0100
+
+      run(0xE92D0180) # stmdb sp!, {r7, r8}
+
+      expect([regs[13], bus.read32(0x0300_00F8), bus.read32(0x0300_00FC)]).to eq([0x0300_00F8, 0x77, 0x88])
+    end
+
     describe 'multiply' do
       [
         [0xFFFF_FFFF, 0xFFFF_FFFF], [0x8000_0000, 0x8000_0000], [0x7FFF_FFFF, 0xFFFF_FFFF], [0x1234_5678, 0x9ABC_DEF0],

@@ -313,6 +313,16 @@ RSpec.describe RubyboyAdvance::Ppu do
         expect(ppu.buffer[0]).to eq(0x7FFF)
       end
 
+      it 'stops showing an OBJ from the line after DISPCNT turns OBJs off' do
+        write_obj(0, 0, 0, 1) # y 0, x 0, tile 1
+        step(1232) # line 0, with the OBJ
+        bus.write16(0x0400_0000, 0x0000) # DISPCNT: mode 0, OBJ off
+
+        step(1232 * 159)
+
+        expect([ppu.buffer[0], ppu.buffer[240]]).to eq([0x1111, 0x7FFF])
+      end
+
       it 'puts the lower OBJ number in front and shows what is behind through color 0' do
         write_obj(0, 0, 0, 3) # y 0, x 0, tile 3
         write_obj(1, 0, 0, 2) # y 0, x 0, tile 2

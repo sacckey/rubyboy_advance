@@ -2,6 +2,10 @@
 
 module RubyboyAdvance
   class Bus
+    # Types Spinel cannot work out by itself: these and the signatures below (spinel/README.md)
+    # @rbs @cycles: Integer
+    # @rbs @next_addr: Integer
+
     attr_reader :interrupt, :cycles
     attr_writer :cpu
 
@@ -49,6 +53,7 @@ module RubyboyAdvance
     end
 
     # At most limit of them; the rest stay for the next call
+    # @rbs (?Integer) -> Integer
     def take_cycles(limit = @cycles)
       cycles = [@cycles, limit].min
       @cycles -= cycles
@@ -61,46 +66,108 @@ module RubyboyAdvance
     end
 
     # Time without a bus access; the access after it is never sequential
+    # @rbs (?Integer) -> void
     def idle(cycles = 1)
       @cycles += cycles
       @next_addr = -1
     end
 
     # ponytail: sequential is guessed from the address unless the caller says, as the DMA does
+    # @rbs (Integer) -> Integer
     def read(addr)
       @cycles += (addr == @next_addr ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
       @next_addr = addr + 1
       raw_read(addr)
     end
 
+    # @rbs (Integer, Integer) -> void
     def write(addr, value)
       @cycles += (addr == @next_addr ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
       @next_addr = addr + 1
       raw_write(addr, value)
     end
 
+    # The two work RAMs and the ROM take nearly every 16- and 32-bit access, so those go straight to their arrays
+    # @rbs (Integer, ?bool) -> Integer
     def read16(addr, seq = addr == @next_addr)
-      @cycles += (seq ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
+      area = addr >> 24
+      @cycles += (seq ? @seq16 : @nonseq16)[area & 0xFF]
       @next_addr = addr + 2
-      raw_read16(addr)
+      case area
+      when 0x03
+        i = addr & 0x7FFE
+        @iwram[i] | (@iwram[i + 1] << 8)
+      when 0x02
+        i = addr & 0x3_FFFE
+        @ewram[i] | (@ewram[i + 1] << 8)
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
+        return raw_read16(addr) if @eeprom
+
+        i = addr & 0x1FF_FFFE
+        (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8)
+      else raw_read16(addr)
+      end
     end
 
+    # @rbs (Integer, Integer, ?bool) -> void
     def write16(addr, value, seq = addr == @next_addr)
-      @cycles += (seq ? @seq16 : @nonseq16)[(addr >> 24) & 0xFF]
+      area = addr >> 24
+      @cycles += (seq ? @seq16 : @nonseq16)[area & 0xFF]
       @next_addr = addr + 2
-      raw_write16(addr, value)
+      case area
+      when 0x03
+        i = addr & 0x7FFE
+        @iwram[i] = value & 0xFF
+        @iwram[i + 1] = (value >> 8) & 0xFF
+      when 0x02
+        i = addr & 0x3_FFFE
+        @ewram[i] = value & 0xFF
+        @ewram[i + 1] = (value >> 8) & 0xFF
+      else raw_write16(addr, value)
+      end
     end
 
+    # @rbs (Integer, ?bool) -> Integer
     def read32(addr, seq = addr == @next_addr)
-      @cycles += (seq ? @seq32 : @nonseq32)[(addr >> 24) & 0xFF]
+      area = addr >> 24
+      @cycles += (seq ? @seq32 : @nonseq32)[area & 0xFF]
       @next_addr = addr + 4
-      raw_read32(addr)
+      case area
+      when 0x03
+        i = addr & 0x7FFC
+        @iwram[i] | (@iwram[i + 1] << 8) | (@iwram[i + 2] << 16) | (@iwram[i + 3] << 24)
+      when 0x02
+        i = addr & 0x3_FFFC
+        @ewram[i] | (@ewram[i + 1] << 8) | (@ewram[i + 2] << 16) | (@ewram[i + 3] << 24)
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
+        return raw_read32(addr) if @eeprom
+
+        i = addr & 0x1FF_FFFC
+        (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8) | ((@rom[i + 2] || 0) << 16) | ((@rom[i + 3] || 0) << 24)
+      else raw_read32(addr)
+      end
     end
 
+    # @rbs (Integer, Integer, ?bool) -> void
     def write32(addr, value, seq = addr == @next_addr)
-      @cycles += (seq ? @seq32 : @nonseq32)[(addr >> 24) & 0xFF]
+      area = addr >> 24
+      @cycles += (seq ? @seq32 : @nonseq32)[area & 0xFF]
       @next_addr = addr + 4
-      raw_write32(addr, value)
+      case area
+      when 0x03
+        i = addr & 0x7FFC
+        @iwram[i] = value & 0xFF
+        @iwram[i + 1] = (value >> 8) & 0xFF
+        @iwram[i + 2] = (value >> 16) & 0xFF
+        @iwram[i + 3] = (value >> 24) & 0xFF
+      when 0x02
+        i = addr & 0x3_FFFC
+        @ewram[i] = value & 0xFF
+        @ewram[i + 1] = (value >> 8) & 0xFF
+        @ewram[i + 2] = (value >> 16) & 0xFF
+        @ewram[i + 3] = (value >> 24) & 0xFF
+      else raw_write32(addr, value)
+      end
     end
 
     # Runs the DMA channels waiting for timing: :vblank or :hblank from the PPU, :fifo_a or :fifo_b from the APU
@@ -114,6 +181,7 @@ module RubyboyAdvance
 
     private
 
+    # @rbs (Integer) -> Integer
     def raw_read(addr)
       case addr >> 24
       when 0x00 then return @bios[addr & 0x3FFF]
@@ -141,6 +209,7 @@ module RubyboyAdvance
       0xff
     end
 
+    # @rbs (Integer, Integer) -> void
     def raw_write(addr, value)
       case addr >> 24
       when 0x05 then raw_write16(addr, value * 0x0101)
@@ -150,20 +219,11 @@ module RubyboyAdvance
       end
     end
 
-    # The ROM and the two work RAMs take nearly every 16- and 32-bit access, so those go straight to their arrays
+    # @rbs (Integer) -> Integer
     def raw_read16(addr)
-      case addr >> 24
-      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
-        return @cartram.read_bit if @eeprom && eeprom?(addr)
+      return @cartram.read_bit if @eeprom && eeprom?(addr)
 
-        i = addr & 0x1FF_FFFE
-        (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8)
-      when 0x03
-        i = addr & 0x7FFE
-        @iwram[i] | (@iwram[i + 1] << 8)
-      when 0x02
-        i = addr & 0x3_FFFE
-        @ewram[i] | (@ewram[i + 1] << 8)
+      case addr >> 24
       when 0x0E, 0x0F then raw_read(addr) * 0x0101
       else
         addr &= ~1
@@ -171,40 +231,22 @@ module RubyboyAdvance
       end
     end
 
+    # @rbs (Integer, Integer) -> void
     def raw_write16(addr, value)
+      return @cartram.write_bit(value) if @eeprom && eeprom?(addr)
+
       case addr >> 24
-      when 0x03
-        i = addr & 0x7FFE
-        @iwram[i] = value & 0xFF
-        @iwram[i + 1] = (value >> 8) & 0xFF
-      when 0x02
-        i = addr & 0x3_FFFE
-        @ewram[i] = value & 0xFF
-        @ewram[i + 1] = (value >> 8) & 0xFF
       when 0x0E, 0x0F then write8(addr, (value >> ((addr & 1) << 3)) & 0xFF)
       else
-        return @cartram.write_bit(value) if @eeprom && eeprom?(addr)
-
         addr &= ~1
         write8(addr, value & 0xFF)
         write8(addr + 1, (value >> 8) & 0xFF)
       end
     end
 
+    # @rbs (Integer) -> Integer
     def raw_read32(addr)
       case addr >> 24
-      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
-        # ponytail: with an EEPROM the two halves go the long way, which looks for it
-        return raw_read16(addr & ~3) + (raw_read16((addr & ~3) + 2) << 16) if @eeprom
-
-        i = addr & 0x1FF_FFFC
-        (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8) | ((@rom[i + 2] || 0) << 16) | ((@rom[i + 3] || 0) << 24)
-      when 0x03
-        i = addr & 0x7FFC
-        @iwram[i] | (@iwram[i + 1] << 8) | (@iwram[i + 2] << 16) | (@iwram[i + 3] << 24)
-      when 0x02
-        i = addr & 0x3_FFFC
-        @ewram[i] | (@ewram[i + 1] << 8) | (@ewram[i + 2] << 16) | (@ewram[i + 3] << 24)
       when 0x0E, 0x0F then raw_read(addr) * 0x0101_0101
       else
         addr &= ~3
@@ -212,20 +254,9 @@ module RubyboyAdvance
       end
     end
 
+    # @rbs (Integer, Integer) -> void
     def raw_write32(addr, value)
       case addr >> 24
-      when 0x03
-        i = addr & 0x7FFC
-        @iwram[i] = value & 0xFF
-        @iwram[i + 1] = (value >> 8) & 0xFF
-        @iwram[i + 2] = (value >> 16) & 0xFF
-        @iwram[i + 3] = (value >> 24) & 0xFF
-      when 0x02
-        i = addr & 0x3_FFFC
-        @ewram[i] = value & 0xFF
-        @ewram[i + 1] = (value >> 8) & 0xFF
-        @ewram[i + 2] = (value >> 16) & 0xFF
-        @ewram[i + 3] = (value >> 24) & 0xFF
       when 0x0E, 0x0F then write8(addr, (value >> ((addr & 3) << 3)) & 0xFF)
       else
         addr &= ~3
@@ -258,6 +289,7 @@ module RubyboyAdvance
       (addr >> 24).between?(0x08, 0x0D) && (addr & @eeprom_mask) == @eeprom_mask
     end
 
+    # @rbs (Integer, Integer) -> void
     def write8(addr, value)
       case addr >> 24
       when 0x02 then @ewram[addr & 0x3FFFF] = value
