@@ -5,7 +5,8 @@ module RubyboyAdvance
     # Address bits each channel uses: DMA0 cannot read the Game Pak, and only DMA3 can write to it.
     SAD_MASKS = [0x07FF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF, 0x0FFF_FFFF].freeze
     DAD_MASKS = [0x07FF_FFFF, 0x07FF_FFFF, 0x07FF_FFFF, 0x0FFF_FFFF].freeze
-    START_TIMINGS = { vblank: 1, hblank: 2 }.freeze # DMAxCNT_H bits 12-13
+    # DMAxCNT_H bits 12-13 and the channels that start then: FIFO A asks DMA1, FIFO B asks DMA2 (NanoBoyAdvance dma.cc)
+    TRIGGERS = { vblank: [1, 0..3], hblank: [2, 0..3], fifo_a: [3, [1]], fifo_b: [3, [2]] }.freeze
 
     # The bus comes in only for the calls that copy, so the DMA does not hold on to it
     def initialize
@@ -41,8 +42,8 @@ module RubyboyAdvance
     end
 
     def trigger(timing, bus)
-      start_timing = START_TIMINGS.fetch(timing)
-      4.times do |channel_index|
+      start_timing, channels = TRIGGERS.fetch(timing)
+      channels.each do |channel_index|
         dma = @channels[channel_index]
         transfer(channel_index, bus) if dma[95] == 1 && (dma >> 92) & 0b11 == start_timing
       end
@@ -54,9 +55,10 @@ module RubyboyAdvance
       dma = @channels[channel_index]
       cnt_h = (dma >> 80) & 0xFFFF
 
-      halfword = cnt_h[10] == 0
+      fifo = fifo?(dma)
+      halfword = cnt_h[10] == 0 && !fifo
       step = halfword ? 2 : 4
-      dad_diff = [step, -step, 0, step][(cnt_h >> 5) & 3]
+      dad_diff = fifo ? 0 : [step, -step, 0, step][(cnt_h >> 5) & 3]
       sad_diff = [step, -step, 0, step][(cnt_h >> 7) & 3]
 
       sad = @sads[channel_index]
@@ -85,8 +87,13 @@ module RubyboyAdvance
       end
     end
 
+    # Start timing 3 feeds a sound FIFO from DMA1 or DMA2: four words to one address, whatever the registers say
+    def fifo?(dma) = (dma >> 92) & 0b11 == 3
+
     # CNT_L, where 0 means the most the channel can move
     def count(dma, channel_index)
+      return 4 if fifo?(dma)
+
       max = channel_index == 3 ? 0x10000 : 0x4000
       cnt_l = (dma >> 64) & (max - 1)
       cnt_l == 0 ? max : cnt_l

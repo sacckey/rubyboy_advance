@@ -9,7 +9,8 @@ RSpec.describe RubyboyAdvance::Bus do
       RubyboyAdvance::Ppu.new(interrupt),
       RubyboyAdvance::Sram.new, interrupt,
       RubyboyAdvance::Timer.new(interrupt),
-      RubyboyAdvance::Keypad.new(interrupt)
+      RubyboyAdvance::Keypad.new(interrupt),
+      RubyboyAdvance::Apu.new
     )
   end
 
@@ -163,7 +164,7 @@ RSpec.describe RubyboyAdvance::Bus do
     def bus_with(rom, cartram)
       described_class.new(
         rom, [], RubyboyAdvance::Ppu.new(interrupt), cartram, interrupt,
-        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt), RubyboyAdvance::Apu.new
       )
     end
 
@@ -268,7 +269,7 @@ RSpec.describe RubyboyAdvance::Bus do
     let(:bus) do
       described_class.new(
         [0] * 4, [0] * 4, RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt,
-        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt)
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt), RubyboyAdvance::Apu.new
       )
     end
 
