@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
     `git ls-files -z lib exe LICENSE README.md`.split("\x0")
   end
   spec.bindir = 'exe'
-  spec.executables = ['rubyboy-advance']
+  spec.executables = %w[rubyboy-advance rubyboy-advance-bench]
   spec.require_paths = ['lib']
 
   spec.add_dependency 'ffi', '~> 1.17'
