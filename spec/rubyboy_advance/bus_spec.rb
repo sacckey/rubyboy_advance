@@ -38,6 +38,40 @@ RSpec.describe RubyboyAdvance::Bus do
     end
   end
 
+  { 'EWRAM' => [0x0200_0000, 0x0204_0000], 'IWRAM' => [0x0300_0000, 0x0300_8000] }.each do |name, (addr, mirror)|
+    describe "16- and 32-bit accesses to #{name}" do
+      it 'read through the mirror what was written as bytes' do
+        4.times { |i| bus.write(addr + 0x10 + i, 0x11 * (i + 1)) }
+
+        expect([bus.read16(mirror + 0x10), bus.read16(mirror + 0x12), bus.read32(mirror + 0x10)]).to eq([0x2211, 0x4433, 0x4433_2211])
+      end
+
+      it 'write through the mirror' do
+        bus.write16(mirror + 0x10, 0xABCD)
+        bus.write32(mirror + 0x14, 0x1234_5678)
+
+        expect(Array.new(8) { |i| bus.read(addr + 0x10 + i) }).to eq([0xCD, 0xAB, 0, 0, 0x78, 0x56, 0x34, 0x12])
+      end
+
+      it 'take an address that is not a multiple of the size as the one below that is' do
+        bus.write32(addr + 0x10, 0x4433_2211)
+        bus.write32(addr + 0x14, 0x8877_6655)
+        expect([bus.read16(addr + 0x11), bus.read32(addr + 0x13)]).to eq([0x2211, 0x4433_2211])
+
+        bus.write16(addr + 0x15, 0xABCD)
+        bus.write32(addr + 0x1B, 0xDEAD_BEEF)
+
+        expect([bus.read32(addr + 0x14), bus.read32(addr + 0x18), bus.read32(addr + 0x1C)]).to eq([0x8877_ABCD, 0xDEAD_BEEF, 0])
+      end
+    end
+  end
+
+  describe '16- and 32-bit reads of the ROM' do
+    it 'take an address that is not a multiple of the size as the one below that is' do
+      expect([bus.read16(0x0800_0001), bus.read16(0x0800_0003), bus.read32(0x0800_0003)]).to eq([0x5678, 0x1234, 0x1234_5678])
+    end
+  end
+
   describe 'VRAM' do
     it 'mirrors the last 32 KB onto the 32 KB before it' do
       bus.write16(0x0601_0000, 0xABCD)
@@ -262,6 +296,34 @@ RSpec.describe RubyboyAdvance::Bus do
       expect(bus.read16(0x0200_0000)).to eq(0xABCD)
       expect(bus.read16(0x0200_0001)).to eq(0xABCD)
       expect(bus.read(0x0200_0002)).to eq(0)
+    end
+  end
+
+  describe 'cycles_to_event' do
+    let(:ppu) { RubyboyAdvance::Ppu.new(interrupt) }
+    let(:timer) { RubyboyAdvance::Timer.new(interrupt) }
+    let(:apu) { RubyboyAdvance::Apu.new }
+    let(:bus) do
+      described_class.new([], [], ppu, RubyboyAdvance::Sram.new, interrupt, timer, RubyboyAdvance::Keypad.new(interrupt), apu)
+    end
+
+    it 'is the time to the next sample of the APU when that comes first' do
+      apu.step(500)
+
+      expect(bus.cycles_to_event).to eq(12)
+    end
+
+    it 'is the time to the next event of the PPU when that comes first' do
+      ppu.step(1000) { nil }
+
+      expect(bus.cycles_to_event).to eq(7)
+    end
+
+    it 'is the time to the next timer overflow when that comes first' do
+      bus.write16(0x0400_0108, 0xFFFB)
+      bus.write16(0x0400_010A, 0x80)
+
+      expect(bus.cycles_to_event).to eq(5)
     end
   end
 

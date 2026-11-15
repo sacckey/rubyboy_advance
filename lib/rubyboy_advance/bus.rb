@@ -2,7 +2,7 @@
 
 module RubyboyAdvance
   class Bus
-    attr_reader :interrupt
+    attr_reader :interrupt, :cycles
     attr_writer :cpu
 
     # The ROM and the cartridge RAM are filled in from WAITCNT
@@ -40,7 +40,7 @@ module RubyboyAdvance
       @keypad = keypad
       @apu = apu
       @cycles = 0
-      @next_addr = nil
+      @next_addr = -1 # no address follows the last access
       @nonseq16 = COSTS16.dup
       @seq16 = COSTS16.dup
       @nonseq32 = COSTS32.dup
@@ -55,10 +55,15 @@ module RubyboyAdvance
       cycles
     end
 
+    # How long a halted CPU can sleep: nothing changes until the PPU, a timer or the APU next does something
+    def cycles_to_event
+      [@ppu.cycles_to_event, @timer.cycles_to_overflow, @apu.cycles_to_sample].min
+    end
+
     # Time without a bus access; the access after it is never sequential
     def idle(cycles = 1)
       @cycles += cycles
-      @next_addr = nil
+      @next_addr = -1
     end
 
     # ponytail: sequential is guessed from the address unless the caller says, as the DMA does
@@ -145,10 +150,20 @@ module RubyboyAdvance
       end
     end
 
+    # The ROM and the two work RAMs take nearly every 16- and 32-bit access, so those go straight to their arrays
     def raw_read16(addr)
-      return @cartram.read_bit if eeprom?(addr)
-
       case addr >> 24
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
+        return @cartram.read_bit if @eeprom && eeprom?(addr)
+
+        i = addr & 0x1FF_FFFE
+        (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8)
+      when 0x03
+        i = addr & 0x7FFE
+        @iwram[i] | (@iwram[i + 1] << 8)
+      when 0x02
+        i = addr & 0x3_FFFE
+        @ewram[i] | (@ewram[i + 1] << 8)
       when 0x0E, 0x0F then raw_read(addr) * 0x0101
       else
         addr &= ~1
@@ -157,11 +172,19 @@ module RubyboyAdvance
     end
 
     def raw_write16(addr, value)
-      return @cartram.write_bit(value) if eeprom?(addr)
-
       case addr >> 24
+      when 0x03
+        i = addr & 0x7FFE
+        @iwram[i] = value & 0xFF
+        @iwram[i + 1] = (value >> 8) & 0xFF
+      when 0x02
+        i = addr & 0x3_FFFE
+        @ewram[i] = value & 0xFF
+        @ewram[i + 1] = (value >> 8) & 0xFF
       when 0x0E, 0x0F then write8(addr, (value >> ((addr & 1) << 3)) & 0xFF)
       else
+        return @cartram.write_bit(value) if @eeprom && eeprom?(addr)
+
         addr &= ~1
         write8(addr, value & 0xFF)
         write8(addr + 1, (value >> 8) & 0xFF)
@@ -170,6 +193,18 @@ module RubyboyAdvance
 
     def raw_read32(addr)
       case addr >> 24
+      when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
+        # ponytail: with an EEPROM the two halves go the long way, which looks for it
+        return raw_read16(addr & ~3) + (raw_read16((addr & ~3) + 2) << 16) if @eeprom
+
+        i = addr & 0x1FF_FFFC
+        (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8) | ((@rom[i + 2] || 0) << 16) | ((@rom[i + 3] || 0) << 24)
+      when 0x03
+        i = addr & 0x7FFC
+        @iwram[i] | (@iwram[i + 1] << 8) | (@iwram[i + 2] << 16) | (@iwram[i + 3] << 24)
+      when 0x02
+        i = addr & 0x3_FFFC
+        @ewram[i] | (@ewram[i + 1] << 8) | (@ewram[i + 2] << 16) | (@ewram[i + 3] << 24)
       when 0x0E, 0x0F then raw_read(addr) * 0x0101_0101
       else
         addr &= ~3
@@ -179,6 +214,18 @@ module RubyboyAdvance
 
     def raw_write32(addr, value)
       case addr >> 24
+      when 0x03
+        i = addr & 0x7FFC
+        @iwram[i] = value & 0xFF
+        @iwram[i + 1] = (value >> 8) & 0xFF
+        @iwram[i + 2] = (value >> 16) & 0xFF
+        @iwram[i + 3] = (value >> 24) & 0xFF
+      when 0x02
+        i = addr & 0x3_FFFC
+        @ewram[i] = value & 0xFF
+        @ewram[i + 1] = (value >> 8) & 0xFF
+        @ewram[i + 2] = (value >> 16) & 0xFF
+        @ewram[i + 3] = (value >> 24) & 0xFF
       when 0x0E, 0x0F then write8(addr, (value >> ((addr & 3) << 3)) & 0xFF)
       else
         addr &= ~3
@@ -208,7 +255,7 @@ module RubyboyAdvance
 
     # ponytail: 16-bit accesses only
     def eeprom?(addr)
-      @eeprom && (addr >> 24).between?(0x08, 0x0D) && (addr & @eeprom_mask) == @eeprom_mask
+      (addr >> 24).between?(0x08, 0x0D) && (addr & @eeprom_mask) == @eeprom_mask
     end
 
     def write8(addr, value)

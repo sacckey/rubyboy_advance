@@ -19,6 +19,24 @@ RSpec.describe RubyboyAdvance::Ppu do
   # Steps the PPU as exe does, running DMA at each HBlank and VBlank it yields
   def step(cycles) = ppu.step(cycles) { |timing| bus.run_dma(timing) }
 
+  describe 'cycles_to_event' do
+    it 'counts down to HBlank, then to the end of the line, and starts again on the next line' do
+      expect(ppu.cycles_to_event).to eq(1007)
+
+      step(1000)
+      expect(ppu.cycles_to_event).to eq(7)
+
+      step(7)
+      expect(ppu.cycles_to_event).to eq(225)
+
+      step(224)
+      expect(ppu.cycles_to_event).to eq(1)
+
+      step(1 + 10)
+      expect(ppu.cycles_to_event).to eq(997)
+    end
+  end
+
   describe 'mode 0' do
     it 'draws BG0 with the tile palette bank and shows the backdrop for color 0' do
       bus.write16(0x0400_0000, 0x0100) # DISPCNT: mode 0, BG0 on
@@ -95,6 +113,15 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_0008, 0x0100) # BG0CNT: 256x256, tiles at 0x06000000, map at 0x06000800
         bus.write16(0x0500_0000, 0x1111) # backdrop
         8.times { |color| bus.write16(0x0500_0002 + color * 2, color + 1) } # bank 0 color c reads as c
+      end
+
+      it 'takes each row of the map from the 32 entries after the row above' do
+        bus.write16(0x0600_0800 + (32 * 2), 0x0001) # map entry (0, 1): tile 1
+        bus.write32(0x0600_0020, 0x0000_0002) # tile 1 row 0: column 0 is color 2
+
+        step(1232 * 160)
+
+        expect([ppu.buffer[7 * 240], ppu.buffer[8 * 240]]).to eq([0x1111, 2])
       end
 
       it 'moves the screen by BG0HOFS and BG0VOFS pixels, inside a tile too' do
@@ -254,6 +281,15 @@ RSpec.describe RubyboyAdvance::Ppu do
           bus.write32(0x0601_0060 + row * 4, 0x1111_0000) # OBJ tile 3: x = 0-3 color 0, x = 4-7 color 1
         end
         128.times { |index| write_obj(index, 0x0200, 0, 0) } # attr0 bit 9: hidden
+      end
+
+      it 'shows an OBJ from the line after OAM turns it on' do
+        step(1232) # line 0, with every OBJ hidden
+        write_obj(0, 0, 0, 1) # y 0, x 0, tile 1
+
+        step(1232 * 159)
+
+        expect([ppu.buffer[0], ppu.buffer[240]]).to eq([0x7FFF, 0x1111])
       end
 
       it 'draws an 8x8 OBJ from the OBJ tiles with its OBJ palette bank' do
@@ -867,6 +903,20 @@ RSpec.describe RubyboyAdvance::Ppu do
         expect([pixel(40, 19), pixel(40, 20), pixel(40, 59), pixel(40, 60)]).to eq([bg0, bg1, bg1, bg0])
       end
 
+      it 'lets every layer show again from the line after the windows are turned off' do
+        bus.write16(0x0400_0000, 0x3100) # DISPCNT: BG0, OBJ, WIN0
+        set_window(0, 0, 8, 0, 160)
+        bus.write16(0x0400_0048, 0x003F) # WININ: everything in WIN0
+        bus.write16(0x0400_004A, 0x0001) # WINOUT: only BG0 outside
+        show_obj(0, 16)
+        step(1232 * 228 + 1232) # line 0 of the second frame
+
+        bus.write16(0x0400_0000, 0x1100) # DISPCNT: BG0, OBJ
+        step(1232)
+
+        expect([pixel(16, 0), pixel(16, 1)]).to eq([bg0, obj])
+      end
+
       it 'uses WININ bits 8-13 inside WIN1, and WIN0 where both are, and shows the backdrop where nothing is allowed' do
         bus.write16(0x0400_0000, 0x6300) # DISPCNT: BG0, BG1, WIN0, WIN1
         set_window(0, 40, 80, 0, 160)
@@ -1224,6 +1274,20 @@ RSpec.describe RubyboyAdvance::Ppu do
         bus.write16(0x0400_000E, 0x0004) # BG3CNT: as BG2CNT
         bus.write16(0x0400_0030, 0x0100) # BG3PA: 1.0
         bus.write16(0x0400_0036, 0x0100) # BG3PD: 1.0
+      end
+
+      it 'blends a rotating BG with the one under it' do
+        bus.write16(0x0400_0000, 0x0C02) # DISPCNT: mode 2, BG2 and BG3
+        bus.write16(0x0400_000C, 0x0005) # BG2CNT: as before, priority 1
+        bus.write32(0x0400_0038, 8 << 8) # BG3X: 8.0, so BG3 shows tile 2 where BG2 shows tile 1
+        bus.write16(0x0500_0002, 0x0010) # color 1: red 16
+        bus.write16(0x0500_0028, 0x0200) # color 20: green 16
+        bus.write16(0x0400_0050, 0x0448) # BLDCNT: 1st BG3, 2nd BG2, effect 1
+        bus.write16(0x0400_0052, 0x0808) # BLDALPHA: EVA 8, EVB 8
+
+        draw_second_frame
+
+        expect(pixels(0, 0)).to eq([0x0108]) # half of each
       end
 
       it 'draws BG3 rotated in mode 2' do

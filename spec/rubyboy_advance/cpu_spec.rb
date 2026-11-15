@@ -138,17 +138,26 @@ RSpec.describe RubyboyAdvance::Cpu do
 
       before { regs[15] = 0 }
 
-      it 'takes 1 cycle for each call while stopped' do
+      it 'sleeps until the next event for each call while stopped' do
         cpu.exec
 
-        expect([cpu.exec, cpu.exec]).to eq([1, 1])
+        expect([cpu.exec, cpu.exec]).to eq([512, 512]) # the next sample of the APU, which nothing steps here
+      end
+
+      it 'sleeps no longer than until a timer overflows' do
+        cpu.exec
+        bus.write16(0x0400_0100, 0xFFFD)
+        bus.write16(0x0400_0102, 0x80)
+        bus.take_cycles
+
+        expect(cpu.exec).to eq(3)
       end
 
       it 'passes on the cycles of a transfer that ran while it was stopped, and stays stopped' do
         cpu.exec
         bus.read32(0x0200_0000) # stands in for an HBlank DMA
 
-        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 1, 0x04])
+        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 512, 0x04])
       end
 
       it 'stops the CPU until an enabled interrupt is requested, even with IME off' do

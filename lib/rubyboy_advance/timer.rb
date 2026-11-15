@@ -2,17 +2,22 @@
 
 module RubyboyAdvance
   class Timer
+    FAR = 1 << 40 # cycles: further than any overflow
+
     def initialize(interrupt)
       @interrupt = interrupt
       @cycles = 0 # One clock that never stops; every prescaler ticks on its multiples, as on hardware
-      @counts = [0, 0, 0, 0]
+      @counts = [0, 0, 0, 0] # as they were when the clock stood at @synced
       @reloads = [0, 0, 0, 0]
       @settings = [0, 0, 0, 0] # 8bit
+      @synced = 0
+      @next_overflow = FAR # the clock value at which a timer next overflows; nothing has to be done before it
     end
 
     def step(cycles)
-      before = @cycles
       @cycles += cycles
+      return if @cycles < @next_overflow
+
       overflows = 0
       4.times do |i|
         if @settings[i][7] == 0
@@ -24,7 +29,7 @@ module RubyboyAdvance
           @counts[i] += overflows
         else
           prescaler_i = prescaler(i)
-          @counts[i] += (@cycles / prescaler_i) - (before / prescaler_i)
+          @counts[i] += (@cycles / prescaler_i) - (@synced / prescaler_i)
         end
 
         overflows = 0
@@ -35,6 +40,13 @@ module RubyboyAdvance
         end
         @interrupt.request(:"timer#{i}") if overflows > 0 && @settings[i][6] == 1
       end
+      @synced = @cycles
+      @next_overflow = @cycles + cycles_to_next_overflow
+    end
+
+    # For a halted CPU to sleep through
+    def cycles_to_overflow
+      @next_overflow - @cycles
     end
 
     def read(addr)
@@ -42,7 +54,7 @@ module RubyboyAdvance
       shift_amount = (addr - 0x100) % 4
 
       case shift_amount
-      when 0, 1 then (@counts[tm_index] >> (shift_amount * 8)) & 0xFF
+      when 0, 1 then (count(tm_index) >> (shift_amount * 8)) & 0xFF
       when 2 then @settings[tm_index]
       else 0
       end
@@ -56,13 +68,41 @@ module RubyboyAdvance
       when 0, 1
         @reloads[tm_index] = (@reloads[tm_index] & ~(0xFF << (shift_amount * 8))) | (value << (shift_amount * 8))
       when 2
+        4.times { |i| @counts[i] = count(i) }
+        @synced = @cycles
         before = @settings[tm_index][7]
         @settings[tm_index] = value
         @counts[tm_index] = @reloads[tm_index] if before == 0 && @settings[tm_index][7] == 1
+        @next_overflow = @cycles + cycles_to_next_overflow
       end
     end
 
     private
+
+    def counts_clock?(index)
+      @settings[index][7] == 1 && (index == 0 || @settings[index][2] == 0)
+    end
+
+    # The counter now: one that counts the clock has moved on since @synced, without an overflow
+    def count(index)
+      return @counts[index] unless counts_clock?(index)
+
+      prescaler_i = prescaler(index)
+      @counts[index] + (@cycles / prescaler_i) - (@synced / prescaler_i)
+    end
+
+    # From @synced. A timer that counts overflows waits for those
+    def cycles_to_next_overflow
+      nearest = FAR
+      4.times do |i|
+        next unless counts_clock?(i)
+
+        prescaler_i = prescaler(i)
+        cycles = (((@cycles / prescaler_i) + 0x10000 - @counts[i]) * prescaler_i) - @cycles
+        nearest = cycles if cycles < nearest
+      end
+      nearest
+    end
 
     def prescaler(index)
       case @settings[index] & 0b11

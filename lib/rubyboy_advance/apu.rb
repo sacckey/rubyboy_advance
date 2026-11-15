@@ -39,6 +39,10 @@ module RubyboyAdvance
       samples
     end
 
+    def cycles_to_sample
+      CYCLES_PER_SAMPLE - @cycles
+    end
+
     def step(cycles)
       @cycles += cycles
       while @cycles >= CYCLES_PER_SAMPLE

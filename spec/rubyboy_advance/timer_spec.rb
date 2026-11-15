@@ -120,6 +120,62 @@ RSpec.describe RubyboyAdvance::Timer do
     end
   end
 
+  describe 'cycles_to_overflow' do
+    it 'is far off with no timer running' do
+      expect(timer.cycles_to_overflow).to be > 1_000_000_000
+    end
+
+    { 0 => 1, 1 => 64, 2 => 256, 3 => 1024 }.each do |bits, cycles|
+      it "counts #{cycles} cycles for each count left with prescaler #{bits}, from where the prescaler stands" do
+        step(10) # the prescalers run on this clock whether a timer is on or not
+        start(0, 0xFFFD, 0x80 | bits)
+
+        expect(timer.cycles_to_overflow).to eq((3 * cycles) - (10 % cycles))
+      end
+    end
+
+    it 'is right at every cycle up to the overflow' do
+      start(1, 0xFFFE, 0x81)
+      seen = Array.new(128) do
+        left = timer.cycles_to_overflow
+        step(1)
+        left
+      end
+
+      expect(seen).to eq(128.downto(1).to_a)
+      expect(overflowed).to eq([1])
+    end
+
+    it 'is the nearest of the timers that are running' do
+      start(0, 0xFFF0, 0x80)
+      start(2, 0xFFFF, 0x81)
+      start(3, 0xFF00, 0x80)
+
+      expect(timer.cycles_to_overflow).to eq(16)
+    end
+
+    it 'counts to the next overflow once one has happened' do
+      start(0, 0xFFFE, 0x80)
+      step(2)
+
+      expect([overflowed, timer.cycles_to_overflow]).to eq([[0], 2])
+    end
+
+    it 'leaves out a timer that counts overflows, and a timer that is off' do
+      start(0, 0xFF00, 0x80)
+      start(1, 0xFFFF, 0x84) # counts up
+      bus.write16(0x0400_0108, 0xFFFF) # TM2 reload, not started
+
+      expect(timer.cycles_to_overflow).to eq(0x100)
+    end
+
+    it 'takes TM0 as counting the clock even with the count-up bit' do
+      start(0, 0xFFFC, 0x84)
+
+      expect(timer.cycles_to_overflow).to eq(4)
+    end
+  end
+
   describe 'overflows for the sound FIFOs' do
     it 'yields the timer once for each overflow' do
       start(0, 0xFFFE, 0x80)
