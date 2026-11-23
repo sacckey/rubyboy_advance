@@ -18,30 +18,21 @@ module RubyboyAdvance
       @cycles += cycles
       return if @cycles < @next_overflow
 
-      overflows = 0
+      sync
+      overflows = [0, 0, 0, 0]
       4.times do |i|
-        if @settings[i][7] == 0
-          overflows = 0
-          next
-        end
+        next if @settings[i][7] == 0
 
-        if i > 0 && @settings[i][2] == 1
-          @counts[i] += overflows
-        else
-          prescaler_i = prescaler(i)
-          @counts[i] += (@cycles / prescaler_i) - (@synced / prescaler_i)
-        end
-
-        overflows = 0
+        @counts[i] += overflows[i - 1] unless counts_clock?(i)
         while @counts[i] >= 0x10000
           @counts[i] -= 0x10000 - @reloads[i]
-          overflows += 1
-          yield i if i < 2 # only timers 0 and 1 can clock the sound FIFOs
+          overflows[i] += 1
         end
-        @interrupt.request(:"timer#{i}") if overflows > 0 && @settings[i][6] == 1
+        @interrupt.request(:"timer#{i}") if overflows[i] > 0 && @settings[i][6] == 1
       end
-      @synced = @cycles
       @next_overflow = @cycles + cycles_to_next_overflow
+      # Timers 0 and 1 clock the sound FIFOs. Told last, since the sound DMA this starts can read the timers
+      2.times { |i| overflows[i].times { yield i } }
     end
 
     # For a halted CPU to sleep through
@@ -68,8 +59,7 @@ module RubyboyAdvance
       when 0, 1
         @reloads[tm_index] = (@reloads[tm_index] & ~(0xFF << (shift_amount * 8))) | (value << (shift_amount * 8))
       when 2
-        4.times { |i| @counts[i] = count(i) }
-        @synced = @cycles
+        sync
         before = @settings[tm_index][7]
         @settings[tm_index] = value
         @counts[tm_index] = @reloads[tm_index] if before == 0 && @settings[tm_index][7] == 1
@@ -81,6 +71,12 @@ module RubyboyAdvance
 
     def counts_clock?(index)
       @settings[index][7] == 1 && (index == 0 || @settings[index][2] == 0)
+    end
+
+    # Brings @counts up to the clock, leaving overflows to step
+    def sync
+      4.times { |i| @counts[i] = count(i) }
+      @synced = @cycles
     end
 
     # The counter now: one that counts the clock has moved on since @synced, without an overflow

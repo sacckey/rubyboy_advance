@@ -192,6 +192,28 @@ RSpec.describe RubyboyAdvance::Timer do
       expect(overflowed).to eq([0, 1])
     end
 
+    # exe starts a sound DMA from the block, and that can read and write the timers
+    it 'has every timer up to date by the time it yields' do
+      start(0, 0xFFC0, 0x80)
+      start(1, 0xFFD0, 0x80) # overflows in the same step, 16 cycles before its end
+      start(3, 0xFF00, 0x80)
+      seen = []
+      timer.step(64) { |id| seen << [id, counter(0), counter(1), counter(3)] }
+
+      expect(seen).to eq([[0, 0xFFC0, 0xFFE0, 0xFF40], [1, 0xFFC0, 0xFFE0, 0xFF40]])
+    end
+
+    it 'counts the step once when a timer is written while it yields' do
+      start(0, 0xFFC0, 0x80)
+      start(2, 0xFF00, 0x80)
+      timer.step(64) do |id|
+        overflowed << id
+        bus.write16(0x0400_010E, 0) # TM3 control
+      end
+
+      expect([overflowed, counter(0), counter(2)]).to eq([[0], 0xFFC0, 0xFF40])
+    end
+
     it 'does not yield timers 2 and 3' do
       start(2, 0xFFFF, 0x80)
       start(3, 0xFFFF, 0x80)
@@ -220,6 +242,16 @@ RSpec.describe RubyboyAdvance::Timer do
       run(2)
 
       expect(counter(1)).to eq(2)
+    end
+
+    it 'does not count while it is off itself' do
+      start(0, 0xFFFF, 0x80)
+      start(1, 0xFF00, 0x84)
+      step(2)
+      bus.write16(0x0400_0106, 0x04) # TM1 off, still set to count up
+      step(3)
+
+      expect(counter(1)).to eq(0xFF02)
     end
 
     it 'does not count when the timer before it is off' do
