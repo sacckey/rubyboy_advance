@@ -49,6 +49,19 @@ Spinel's `Integer` is 64 bits wide, and by default a result that does not fit ra
 64 bits: registers wider than that are held as bytes, products are worked out by halves, and no
 shift goes past the width of a word.
 
+Spinel turns a value into a plain C integer only when it can tell its type. Where it cannot, the
+value is boxed and every use of it is slow. Three things made it give up in the hot paths, and
+the code avoids them:
+
+- A type that goes round between the CPU and the bus, each taking what the other hands back. The
+  `# @rbs` comments in `cpu.rb`, `bus.rb` and `interrupt.rb` state those types.
+- A method that can return `nil` where a number is expected, such as a `case` without `else`.
+- One array holding objects of several classes that have methods of the same name. That is why
+  the APU has an instance variable for each sound channel.
+
+`spinel --warn-widen` lists the places where Spinel gave up on a type, and `spinel --emit-rbs`
+prints the types it worked out.
+
 With the Spinel revision below, a program that uses `optparse` is refused if it also has a method
 named `fetch`. That is why the CPU's is `fetch_opcode`.
 

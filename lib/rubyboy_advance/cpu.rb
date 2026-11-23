@@ -20,7 +20,17 @@ module RubyboyAdvance
       end
     end.freeze
 
+    # Types Spinel cannot work out by itself, since the values go round between the CPU and the bus (spinel/README.md)
+    # @rbs @regs: Array[Integer]
+    # @rbs @cpsr: Integer
+    # @rbs @banked_usr: Array[Integer]
+    # @rbs @banked_fiq: Array[Integer]
+    # @rbs @next_address: Integer
+    # @rbs @next_opcode: Integer
+    # @rbs @after_next_opcode: Integer
+
     MAX_STEP = 64 # cycles
+    BITS_SET = Array.new(256) { |byte| (0..7).count { |i| byte[i] == 1 } }.freeze
 
     def initialize(bus)
       @regs = Array.new(16, 0)
@@ -40,10 +50,9 @@ module RubyboyAdvance
     def exec
       # The bus may still hold time: a DMA ran since the last call, or the last instruction started one.
       # It passes first, a step at a time, so that the timers and the sound stay in order through it
-      cycles = @bus.take_cycles(MAX_STEP)
-      return cycles if cycles > 0
+      return @bus.take_cycles(MAX_STEP) if @bus.cycles > 0
 
-      return 1 if @interrupt.cpu_halted?
+      return @bus.cycles_to_event if @interrupt.halted
 
       run_instruction
       @bus.take_cycles(MAX_STEP)
@@ -60,10 +69,11 @@ module RubyboyAdvance
     def run_instruction
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
-      @regs[15] &= flag_t ? ~1 : ~3
+      thumb = @cpsr[5] == 1
+      @regs[15] &= thumb ? ~1 : ~3
 
-      if @interrupt.irq? && @cpsr[7] == 0
-        fetch_opcode(pc, flag_t ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
+      if @interrupt.irq && @cpsr[7] == 0
+        fetch_opcode(pc, thumb ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
         @spsrs[:irq] = @cpsr
         update_banked_regs(:irq)
         self.lr = pc + 4
@@ -72,34 +82,34 @@ module RubyboyAdvance
         return
       end
 
-      address = pc
+      address = @regs[15]
 
-      if flag_t
+      if thumb
         opcode = fetch_opcode(address, 2)
         @regs[15] += 2
 
         case opcode >> 12
         when 0x0, 0x1
-          rs = reg(opcode[3..5])
-          rd_index = opcode[0..2]
+          rs = @regs[(opcode >> 3) & 0x7]
+          rd_index = opcode & 0x7
 
-          case opcode[11..12]
+          case (opcode >> 11) & 0x3
           when 0b11
             # Format 2: Add / subtract
-            immediate_value = opcode[6..8]
+            immediate_value = (opcode >> 6) & 0x7
 
-            case opcode[9..10]
-            when 0b00 then @regs[rd_index] = add(rs, reg(immediate_value))
-            when 0b01 then @regs[rd_index] = sub(rs, reg(immediate_value))
+            case (opcode >> 9) & 0x3
+            when 0b00 then @regs[rd_index] = add(rs, @regs[immediate_value])
+            when 0b01 then @regs[rd_index] = sub(rs, @regs[immediate_value])
             when 0b10 then @regs[rd_index] = add(rs, immediate_value)
             when 0b11 then @regs[rd_index] = sub(rs, immediate_value)
             end
           else
             # Format 1: Move shifted register (LSL, LSR, ASR)
-            offset = opcode[6..10]
+            offset = (opcode >> 6) & 0x1F
             @shifter_carry = nil
 
-            case opcode[11..12]
+            case (opcode >> 11) & 0x3
             when 0b00 then @regs[rd_index] = lsl(rs, offset, s: true)
             when 0b01
               offset = 32 if offset == 0
@@ -114,26 +124,26 @@ module RubyboyAdvance
           end
         when 0x2, 0x3
           # Format 3: Move / compare / add / subtract immediate
-          nn = opcode[0..7]
-          rd = opcode[8..10]
-          case opcode[11..12]
+          nn = opcode & 0xFF
+          rd = (opcode >> 8) & 0x7
+          case (opcode >> 11) & 0x3
           when 0b00
             @regs[rd] = nn
             update_nz(nn)
-          when 0b01 then sub(reg(rd), nn)
-          when 0b10 then @regs[rd] = add(reg(rd), nn)
-          when 0b11 then @regs[rd] = sub(reg(rd), nn)
+          when 0b01 then sub(@regs[rd], nn)
+          when 0b10 then @regs[rd] = add(@regs[rd], nn)
+          when 0b11 then @regs[rd] = sub(@regs[rd], nn)
           end
         when 0x4
-          case opcode[10..11]
+          case (opcode >> 10) & 0x3
           when 0b00
             # Format 4: ALU operations
-            rs_index = opcode[3..5]
-            rs = reg(rs_index)
-            rd_index = opcode[0..2]
-            rd = reg(rd_index)
+            rs_index = (opcode >> 3) & 0x7
+            rs = @regs[rs_index]
+            rd_index = opcode & 0x7
+            rd = @regs[rd_index]
             @shifter_carry = nil
-            op = opcode[6..9]
+            op = (opcode >> 6) & 0xF
             @bus.idle if [0x2, 0x3, 0x4, 0x7].include?(op) # shifts
 
             case op
@@ -160,10 +170,10 @@ module RubyboyAdvance
             self.flag_c = @shifter_carry unless @shifter_carry.nil?
           when 0b01
             # Format 5: Hi register operations / branch exchange
-            rd = opcode[7] << 3 | opcode[0..2]
-            rs = (opcode[6] << 3) | opcode[3..5]
+            rd = opcode[7] << 3 | (opcode & 0x7)
+            rs = (opcode[6] << 3) | ((opcode >> 3) & 0x7)
 
-            case opcode[8..9]
+            case (opcode >> 8) & 0x3
             when 0b00
               set_reg(rd, (reg(rd) + reg(rs)) & 0xFFFF_FFFF)
             when 0b01
@@ -175,33 +185,33 @@ module RubyboyAdvance
             end
           else
             # Format 6: PC-relative load
-            rd_index = opcode[8..10]
-            offset = opcode[0..7] << 2
+            rd_index = (opcode >> 8) & 0x7
+            offset = (opcode & 0xFF) << 2
 
             @regs[rd_index] = ldr((reg(15) & ~2) + offset)
           end
         when 0x5
           # Format 7/8: Load / store with register offset (bit 9: 0 = format 7, 1 = format 8 sign-extended)
-          ro_index = opcode[6..8]
-          rb_index = opcode[3..5]
-          rd_index = opcode[0..2]
-          addr = (reg(rb_index) + reg(ro_index)) & 0xFFFF_FFFF
+          ro_index = (opcode >> 6) & 0x7
+          rb_index = (opcode >> 3) & 0x7
+          rd_index = opcode & 0x7
+          addr = (@regs[rb_index] + @regs[ro_index]) & 0xFFFF_FFFF
 
           if opcode[9] == 0
-            case opcode[10..11]
+            case (opcode >> 10) & 0x3
             when 0b00
-              @bus.write32(addr, reg(rd_index))
+              @bus.write32(addr, @regs[rd_index])
             when 0b01
-              @bus.write(addr, reg(rd_index) & 0xFF)
+              @bus.write(addr, @regs[rd_index] & 0xFF)
             when 0b10
               @regs[rd_index] = ldr(addr)
             when 0b11
               @regs[rd_index] = ldrb(addr)
             end
           else
-            case opcode[10..11]
+            case (opcode >> 10) & 0x3
             when 0b00
-              @bus.write16(addr, reg(rd_index) & 0xFFFF)
+              @bus.write16(addr, @regs[rd_index] & 0xFFFF)
             when 0b01
               @regs[rd_index] = ldrsb(addr)
             when 0b10
@@ -212,64 +222,64 @@ module RubyboyAdvance
           end
         when 0x6, 0x7
           # Format 9: Load / store with immediate offset
-          rb_index = opcode[3..5]
-          rd_index = opcode[0..2]
-          offset = opcode[6..10]
+          rb_index = (opcode >> 3) & 0x7
+          rd_index = opcode & 0x7
+          offset = (opcode >> 6) & 0x1F
           offset <<= 2 if opcode[12] == 0
 
-          addr = reg(rb_index) + offset
+          addr = @regs[rb_index] + offset
 
-          case opcode[11..12]
+          case (opcode >> 11) & 0x3
           when 0b00
-            @bus.write32(addr, reg(rd_index))
+            @bus.write32(addr, @regs[rd_index])
           when 0b01
             @regs[rd_index] = ldr(addr)
           when 0b10
-            @bus.write(addr, reg(rd_index) & 0xFF)
+            @bus.write(addr, @regs[rd_index] & 0xFF)
           when 0b11
             @regs[rd_index] = ldrb(addr)
           end
         when 0x8
           # Format 10: Load / store halfword
-          rb_index = opcode[3..5]
-          rd_index = opcode[0..2]
-          offset = opcode[6..10] << 1
+          rb_index = (opcode >> 3) & 0x7
+          rd_index = opcode & 0x7
+          offset = ((opcode >> 6) & 0x1F) << 1
 
-          addr = reg(rb_index) + offset
+          addr = @regs[rb_index] + offset
 
           if opcode[11] == 0
-            @bus.write16(addr, reg(rd_index) & 0xFFFF)
+            @bus.write16(addr, @regs[rd_index] & 0xFFFF)
           else
             @regs[rd_index] = ldrh(addr)
           end
         when 0x9
           # Format 11: SP-relative load / store
-          rd_index = opcode[8..10]
-          offset = opcode[0..7] << 2
+          rd_index = (opcode >> 8) & 0x7
+          offset = (opcode & 0xFF) << 2
 
           addr = sp + offset
 
           if opcode[11] == 0
-            @bus.write32(addr, reg(rd_index))
+            @bus.write32(addr, @regs[rd_index])
           else
             @regs[rd_index] = ldr(addr)
           end
         when 0xA
           # Format 12: Load address
-          rd = opcode[8..10]
-          nn = opcode[0..7]
+          rd = (opcode >> 8) & 0x7
+          nn = opcode & 0xFF
           @regs[rd] = (opcode[11] == 0 ? reg(15) & ~2 : sp) + (nn << 2)
         when 0xB
-          case opcode[8..11]
+          case (opcode >> 8) & 0xF
           when 0b0000
             # Format 13: Add offset to stack pointer
-            offset = opcode[0..6] << 2
+            offset = (opcode & 0x7F) << 2
             self.sp = (opcode[7] == 0 ? sp + offset : sp - offset) & 0xFFFF_FFFF
           when 0b0100, 0b0101, 0b1100, 0b1101
             # Format 14: Push / pop registers
-            rlist = opcode[0..7]
+            rlist = opcode & 0xFF
             is_push = opcode[11] == 0
-            n = 8.times.count { |i| rlist[i] == 1 }
+            n = BITS_SET[rlist]
             n += 1 if opcode[8] == 1
 
             start_address = is_push ? sp - (n << 2) : sp
@@ -279,7 +289,7 @@ module RubyboyAdvance
               next unless rlist[i] == 1
 
               if is_push
-                @bus.write32(current_address, reg(i))
+                @bus.write32(current_address, @regs[i])
               else
                 set_reg(i, @bus.read32(current_address))
               end
@@ -288,7 +298,7 @@ module RubyboyAdvance
 
             if opcode[8] == 1
               if is_push
-                @bus.write32(current_address, reg(14))
+                @bus.write32(current_address, @regs[14])
               else
                 set_reg(15, @bus.read32(current_address))
               end
@@ -298,11 +308,11 @@ module RubyboyAdvance
           end
         when 0xC
           # Format 15: Multiple load / store
-          rlist = opcode[0..7]
+          rlist = opcode & 0xFF
           is_load = opcode[11] == 1
-          n = 8.times.count { |i| rlist[i] == 1 }
-          rb_index = opcode[8..10]
-          rb = reg(rb_index)
+          n = BITS_SET[rlist]
+          rb_index = (opcode >> 8) & 0x7
+          rb = @regs[rb_index]
 
           current_address = rb
           new_rb = rb + (n << 2)
@@ -321,7 +331,7 @@ module RubyboyAdvance
                 set_reg(i, @bus.read32(current_address))
               else
                 write_value = if i != rb_index
-                                reg(i)
+                                @regs[i]
                               elsif is_first
                                 rb
                               else
@@ -337,16 +347,16 @@ module RubyboyAdvance
 
           @regs[rb_index] = new_rb if !is_load || rlist[rb_index] == 0
         when 0xD
-          case opcode[8..11]
+          case (opcode >> 8) & 0xF
           when 0xE
             raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
           when 0xF
             # Format 17: Software interrupt
             swi
           else
-            return unless executable?(opcode[8..11])
+            return unless executable?((opcode >> 8) & 0xF)
 
-            offset = opcode[0..7]
+            offset = opcode & 0xFF
             offset -= 0x100 if offset[7] == 1
             self.pc = reg(15) + (offset << 1)
           end
@@ -354,7 +364,7 @@ module RubyboyAdvance
           case opcode[11]
           when 0
             # Format 18: Unconditional branch
-            offset = opcode[0..10]
+            offset = opcode & 0x7FF
             offset -= 0x800 if offset[10] == 1
             self.pc = reg(15) + (offset << 1)
           else
@@ -362,7 +372,7 @@ module RubyboyAdvance
           end
         when 0xF
           # Format 19: Long branch with link. The two halves are separate instructions linked through LR
-          offset = opcode[0..10]
+          offset = opcode & 0x7FF
           if opcode[11] == 0
             offset -= 0x800 if offset[10] == 1
             self.lr = (reg(15) + (offset << 12)) & 0xFFFF_FFFF
@@ -383,15 +393,15 @@ module RubyboyAdvance
       instruction = determine_instruction(opcode)
       case instruction
       when :branch_and_exchange
-        rn_index = opcode[0..3]
+        rn_index = opcode & 0xF
         rn = reg(rn_index)
         bx(rn)
       when :block_data_transfer
-        rlist = opcode[0..15]
+        rlist = opcode & 0xFFFF
         is_load = opcode[20] == 1
-        n = 16.times.count { |i| rlist[i] == 1 }
+        n = BITS_SET[rlist & 0xFF] + BITS_SET[rlist >> 8]
         multiplicand = n == 0 ? 16 : n
-        rn_index = opcode[16..19]
+        rn_index = (opcode >> 16) & 0xF
         rn = @regs[rn_index]
         from = current_cpu_mode
 
@@ -446,20 +456,20 @@ module RubyboyAdvance
 
       when :data_processing
         s = opcode[20] == 1
-        rn_index = opcode[16..19]
+        rn_index = (opcode >> 16) & 0xF
         rn = reg(rn_index)
         @shifter_carry = nil
         op2 = if opcode[25] == 0
                 r = opcode[4]
-                n = r == 0 ? opcode[7..11] : reg(opcode[8..11]) & 0xFF
-                rm_index = opcode[0..3]
+                n = r == 0 ? ((opcode >> 7) & 0x1F) : reg((opcode >> 8) & 0xF) & 0xFF
+                rm_index = opcode & 0xF
                 x = reg(rm_index)
                 if r == 1
                   @bus.idle
                   rn += 4 if rn_index == 15
                   x += 4 if rm_index == 15
                 end
-                case opcode[5..6]
+                case (opcode >> 5) & 0x3
                 when 0b00
                   lsl(x, n, s:)
                 when 0b01
@@ -472,11 +482,11 @@ module RubyboyAdvance
                   r == 0 && n == 0 ? rrx(x, s:) : ror(x, n, s:)
                 end
               else
-                n = opcode[8..11] * 2
-                x = opcode[0..7]
+                n = ((opcode >> 8) & 0xF) * 2
+                x = opcode & 0xFF
                 ror(x, n, s:)
               end
-        code = opcode[21..24]
+        code = (opcode >> 21) & 0xF
         result =
           case code
           when 0x00, 0x08 then rn & op2
@@ -535,7 +545,7 @@ module RubyboyAdvance
           when 0x0F then ~op2
           end & 0xFFFF_FFFF
 
-        rd = opcode[12..15]
+        rd = (opcode >> 12) & 0xF
         if s
           if rd == 15
             tmp = spsr(current_cpu_mode)
@@ -562,11 +572,11 @@ module RubyboyAdvance
       when :single_data_transfer
         offset =
           if opcode[25] == 0
-            opcode[0..11]
+            (opcode & 0xFFF)
           else
-            rm = reg(opcode[0..3])
-            shift_amount = opcode[7..11]
-            case opcode[5..6]
+            rm = reg(opcode & 0xF)
+            shift_amount = (opcode >> 7) & 0x1F
+            case (opcode >> 5) & 0x3
             when 0b00 then lsl(rm, shift_amount)
             when 0b01 then shift_amount == 0 ? lsr(rm, 32) : lsr(rm, shift_amount)
             when 0b10 then shift_amount == 0 ? asr(rm, 32) : asr(rm, shift_amount)
@@ -574,7 +584,7 @@ module RubyboyAdvance
             end
           end
         transfer(opcode, offset) do |addr|
-          rd = opcode[12..15]
+          rd = (opcode >> 12) & 0xF
           if opcode[20] == 1
             set_reg(rd, opcode[22] == 0 ? ldr(addr) : ldrb(addr))
           else
@@ -583,9 +593,9 @@ module RubyboyAdvance
           end
         end
       when :single_data_swap
-        rn_index = opcode[16..19]
-        rm_index = opcode[0..3]
-        rd_index = opcode[12..15]
+        rn_index = (opcode >> 16) & 0xF
+        rm_index = opcode & 0xF
+        rd_index = (opcode >> 12) & 0xF
         is_byte = opcode[22] == 1
 
         addr = reg(rn_index)
@@ -595,55 +605,55 @@ module RubyboyAdvance
         set_reg(rd_index, read_value)
 
       when :multiply
-        @bus.idle(multiply_cycles(reg(opcode[8..11])) + opcode[21])
-        result = mul32(reg(opcode[0..3]), reg(opcode[8..11]))
-        result = (result + reg(opcode[12..15])) & 0xFFFF_FFFF if opcode[21] == 1
+        @bus.idle(multiply_cycles(reg((opcode >> 8) & 0xF)) + opcode[21])
+        result = mul32(reg(opcode & 0xF), reg((opcode >> 8) & 0xF))
+        result = (result + reg((opcode >> 12) & 0xF)) & 0xFFFF_FFFF if opcode[21] == 1
 
         update_nz(result) if opcode[20] == 1
 
-        @regs[opcode[16..19]] = result
+        @regs[((opcode >> 16) & 0xF)] = result
 
       when :multiply_long
-        @bus.idle(multiply_cycles(reg(opcode[8..11]), signed: opcode[22] == 1) + 1 + opcode[21])
-        high, low = mul64(reg(opcode[0..3]), reg(opcode[8..11]), signed: opcode[22] == 1)
+        @bus.idle(multiply_cycles(reg((opcode >> 8) & 0xF), signed: opcode[22] == 1) + 1 + opcode[21])
+        high, low = mul64(reg(opcode & 0xF), reg((opcode >> 8) & 0xF), signed: opcode[22] == 1)
         if opcode[21] == 1
-          low += reg(opcode[12..15])
-          high = (high + reg(opcode[16..19]) + (low >> 32)) & 0xFFFF_FFFF
+          low += reg((opcode >> 12) & 0xF)
+          high = (high + reg((opcode >> 16) & 0xF) + (low >> 32)) & 0xFFFF_FFFF
           low &= 0xFFFF_FFFF
         end
 
-        @regs[opcode[16..19]] = high
-        @regs[opcode[12..15]] = low
+        @regs[((opcode >> 16) & 0xF)] = high
+        @regs[((opcode >> 12) & 0xF)] = low
 
         if opcode[20] == 1
           self.flag_z = high == 0 && low == 0
           self.flag_n = high[31] == 1
         end
       when :halfword_data_transfer
-        offset = opcode[22] == 0 ? reg(opcode[0..3]) : (opcode[8..11] << 4) | opcode[0..3]
+        offset = opcode[22] == 0 ? reg(opcode & 0xF) : (((opcode >> 8) & 0xF) << 4) | (opcode & 0xF)
         transfer(opcode, offset) do |addr|
-          case (opcode[20] << 2) | opcode[5..6]
+          case (opcode[20] << 2) | ((opcode >> 5) & 0x3)
           when 0b001
-            rd = opcode[12..15]
+            rd = (opcode >> 12) & 0xF
             value = rd == 15 ? reg(rd) + 4 : reg(rd)
             @bus.write16(addr, value & 0xFFFF)
-          when 0b101 then set_reg(opcode[12..15], ldrh(addr))
-          when 0b110 then set_reg(opcode[12..15], ldrsb(addr))
-          when 0b111 then set_reg(opcode[12..15], ldrsh(addr))
+          when 0b101 then set_reg((opcode >> 12) & 0xF, ldrh(addr))
+          when 0b110 then set_reg((opcode >> 12) & 0xF, ldrsb(addr))
+          when 0b111 then set_reg((opcode >> 12) & 0xF, ldrsh(addr))
           else
             raise format('Unknown halfword transfer opcode %<opcode>08X at %<address>08X', opcode:, address:)
           end
         end
       when :branch
-        offset = opcode[0..23]
+        offset = opcode & 0xFFFFFF
         offset -= 0x100_0000 if offset[23] == 1
         self.lr = pc if opcode[24] == 1
 
         self.pc = reg(15) + (offset << 2)
       when :software_interrupt then swi
-      when :mrs then @regs[opcode[12..15]] = opcode[22] == 0 ? @cpsr : spsr(current_cpu_mode)
+      when :mrs then @regs[((opcode >> 12) & 0xF)] = opcode[22] == 0 ? @cpsr : spsr(current_cpu_mode)
       when :msr
-        x = opcode[25] == 0 ? reg(opcode[0..3]) : ror(opcode[0..7], opcode[8..11] * 2)
+        x = opcode[25] == 0 ? reg(opcode & 0xF) : ror(opcode & 0xFF, ((opcode >> 8) & 0xF) * 2)
         mask = 0xFF000000 * opcode[19] | 0x00FF0000 * opcode[18] | 0x0000FF00 * opcode[17] | 0x000000FF * opcode[16]
 
         if opcode[22] == 0
@@ -754,12 +764,12 @@ module RubyboyAdvance
     # Any write to r15 refills the pipeline, even to the next address
     def pc=(value)
       @regs[15] = value
-      @next_address = nil
+      @next_address = -1
     end
 
     def set_reg(index, value)
       @regs[index] = value
-      @next_address = nil if index == 15
+      @next_address = -1 if index == 15
     end
 
     # Reads a register as an instruction operand. pc already points past the
@@ -768,7 +778,7 @@ module RubyboyAdvance
     def reg(index)
       return @regs[index] if index != 15
 
-      @regs[15] + (flag_t ? 2 : 4)
+      @regs[15] + (@cpsr[5] == 1 ? 2 : 4)
     end
 
     def flag_t
@@ -812,8 +822,7 @@ module RubyboyAdvance
     end
 
     def update_nz(result)
-      self.flag_z = result == 0
-      self.flag_n = result[31] == 1
+      @cpsr = (@cpsr & 0x3FFF_FFFF) | (result[31] << 31) | (result == 0 ? 0x4000_0000 : 0)
 
       result
     end
@@ -1003,15 +1012,15 @@ module RubyboyAdvance
     end
 
     def transfer(opcode, offset)
-      rn_index = opcode[16..19]
-      rd_index = opcode[12..15]
+      rn_index = (opcode >> 16) & 0xF
+      rd_index = (opcode >> 12) & 0xF
       offset_addr = (opcode[23] == 1 ? reg(rn_index) + offset : reg(rn_index) - offset) & 0xFFFF_FFFF
       yield(opcode[24] == 1 ? offset_addr : reg(rn_index))
       @regs[rn_index] = offset_addr if (opcode[24] == 0 || opcode[21] == 1) && (opcode[20] == 0 || rn_index != rd_index)
     end
 
     def determine_instruction(opcode)
-      INSTRUCTION_TABLE[opcode[20..27] << 4 | opcode[4..7]]
+      INSTRUCTION_TABLE[((opcode >> 20) & 0xFF) << 4 | ((opcode >> 4) & 0xF)]
     end
   end
 end

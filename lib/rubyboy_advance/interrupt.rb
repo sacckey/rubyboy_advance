@@ -12,15 +12,27 @@ module RubyboyAdvance
       timer3: 6
     }.freeze
 
+    # @rbs @ie: Integer
+    # @rbs @if: Integer
+    # @rbs @ime: Integer
+
+    # Asked with every instruction, so they are kept ready and only worked out when a register changes
+    attr_reader :irq, :halted
+
+    alias irq? irq
+    alias cpu_halted? halted
+
     def initialize
       @ie = 0
       @if = 0
       @ime = 0
-      @halt_flag = false
+      @halted = false
+      @irq = false
     end
 
     def request(interrupt)
       @if |= (1 << INTERRUPTS[interrupt])
+      update
     end
 
     def read(addr)
@@ -30,7 +42,7 @@ module RubyboyAdvance
       when 0x202 then @if & 0xFF
       when 0x203 then (@if >> 8) & 0xFF
       when 0x208 then @ime
-      when 0x209 then 0
+      else 0
       end
     end
 
@@ -42,17 +54,18 @@ module RubyboyAdvance
       when 0x203 then @if &= ~(value << 8)
       when 0x208 then @ime = value[0]
       when 0x209 then nil
-      when 0x301 then @halt_flag = (value[7] == 0)
+      when 0x301 then @halted = (value[7] == 0)
       end
+      update
     end
 
-    def irq?
-      @ime[0] == 1 && (@if & @ie) != 0
-    end
+    private
 
-    def cpu_halted?
-      @halt_flag = false if (@if & @ie) != 0
-      @halt_flag
+    # An enabled request wakes a halted CPU even with IME off
+    def update
+      pending = (@if & @ie) != 0
+      @halted = false if pending
+      @irq = pending && @ime[0] == 1
     end
   end
 end

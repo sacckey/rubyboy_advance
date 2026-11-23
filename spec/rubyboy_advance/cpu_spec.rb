@@ -138,17 +138,26 @@ RSpec.describe RubyboyAdvance::Cpu do
 
       before { regs[15] = 0 }
 
-      it 'takes 1 cycle for each call while stopped' do
+      it 'sleeps until the next event for each call while stopped' do
         cpu.exec
 
-        expect([cpu.exec, cpu.exec]).to eq([1, 1])
+        expect([cpu.exec, cpu.exec]).to eq([512, 512]) # the next sample of the APU, which nothing steps here
+      end
+
+      it 'sleeps no longer than until a timer overflows' do
+        cpu.exec
+        bus.write16(0x0400_0100, 0xFFFD)
+        bus.write16(0x0400_0102, 0x80)
+        bus.take_cycles
+
+        expect(cpu.exec).to eq(3)
       end
 
       it 'passes on the cycles of a transfer that ran while it was stopped, and stays stopped' do
         cpu.exec
         bus.read32(0x0200_0000) # stands in for an HBlank DMA
 
-        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 1, 0x04])
+        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 512, 0x04])
       end
 
       it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
@@ -403,6 +412,34 @@ RSpec.describe RubyboyAdvance::Cpu do
 
     def s32(n) = n[31] == 1 ? n - 0x1_0000_0000 : n
     def words(n) = [(n >> 32) & 0xFFFF_FFFF, n & 0xFFFF_FFFF]
+
+    { 'movs of 0' => [0xE3B00000, [0, 1]], 'movs of 1' => [0xE3B00001, [0, 0]], 'mvns of 0' => [0xE3F00000, [1, 0]] }.each do |name, (opcode, flags)|
+      it "sets N and Z to #{flags.join(' and ')} for #{name}, whatever they were" do
+        got = [0x1F, 0xC000_001F].map do |before|
+          cpu.instance_variable_set(:@cpsr, before)
+          run(opcode)
+          [cpsr[31], cpsr[30]]
+        end
+
+        expect(got).to eq([flags, flags])
+      end
+    end
+
+    it 'reads r15 as the address of the instruction + 4 in Thumb' do
+      run(0x4678, thumb: true) # mov r0, pc
+
+      expect(regs[0]).to eq(base + 4)
+    end
+
+    it 'moves the base of stmdb down by a word for each register of the list' do
+      regs[7] = 0x77
+      regs[8] = 0x88
+      regs[13] = 0x0300_0100
+
+      run(0xE92D0180) # stmdb sp!, {r7, r8}
+
+      expect([regs[13], bus.read32(0x0300_00F8), bus.read32(0x0300_00FC)]).to eq([0x0300_00F8, 0x77, 0x88])
+    end
 
     describe 'multiply' do
       [

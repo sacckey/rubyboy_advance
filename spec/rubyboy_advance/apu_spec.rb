@@ -83,6 +83,18 @@ RSpec.describe RubyboyAdvance::Apu do
     end
   end
 
+  describe 'cycles_to_sample' do
+    it 'counts down to the next sample and starts again after it' do
+      expect(apu.cycles_to_sample).to eq(512)
+
+      apu.step(500)
+      expect(apu.cycles_to_sample).to eq(12)
+
+      apu.step(12 + 100)
+      expect(apu.cycles_to_sample).to eq(412)
+    end
+  end
+
   describe 'samples' do
     it 'makes one for each side every 512 cycles' do
       apu.step(511)
