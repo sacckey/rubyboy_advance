@@ -18,7 +18,7 @@ module RubyboyAdvance
       @cycles += cycles
       return if @cycles < @next_overflow
 
-      sync
+      sync(@cycles)
       overflows = [0, 0, 0, 0]
       4.times do |i|
         next if @settings[i][7] == 0
@@ -30,7 +30,7 @@ module RubyboyAdvance
         end
         @interrupt.request(:"timer#{i}") if overflows[i] > 0 && @settings[i][6] == 1
       end
-      @next_overflow = @cycles + cycles_to_next_overflow
+      @next_overflow = @synced + cycles_to_next_overflow
       # Timers 0 and 1 clock the sound FIFOs. Told last, since the sound DMA this starts can read the timers
       2.times { |i| overflows[i].times { yield i } }
     end
@@ -40,18 +40,19 @@ module RubyboyAdvance
       @next_overflow - @cycles
     end
 
-    def read(addr)
+    # ahead: how far the CPU has run on since the last step
+    def read(addr, ahead)
       tm_index = (addr - 0x100) / 4
       shift_amount = (addr - 0x100) % 4
 
       case shift_amount
-      when 0, 1 then (count(tm_index) >> (shift_amount * 8)) & 0xFF
+      when 0, 1 then (count(tm_index, @cycles + ahead) >> (shift_amount * 8)) & 0xFF
       when 2 then @settings[tm_index]
       else 0
       end
     end
 
-    def write(addr, value)
+    def write(addr, value, ahead)
       tm_index = (addr - 0x100) / 4
       shift_amount = (addr - 0x100) % 4
 
@@ -59,11 +60,11 @@ module RubyboyAdvance
       when 0, 1
         @reloads[tm_index] = (@reloads[tm_index] & ~(0xFF << (shift_amount * 8))) | (value << (shift_amount * 8))
       when 2
-        sync
+        sync(@cycles + ahead)
         before = @settings[tm_index][7]
         @settings[tm_index] = value
         @counts[tm_index] = @reloads[tm_index] if before == 0 && @settings[tm_index][7] == 1
-        @next_overflow = @cycles + cycles_to_next_overflow
+        @next_overflow = @synced + cycles_to_next_overflow
       end
     end
 
@@ -73,18 +74,18 @@ module RubyboyAdvance
       @settings[index][7] == 1 && (index == 0 || @settings[index][2] == 0)
     end
 
-    # Brings @counts up to the clock, leaving overflows to step
-    def sync
-      4.times { |i| @counts[i] = count(i) }
-      @synced = @cycles
+    # Brings @counts up to now, leaving overflows to step
+    def sync(now)
+      4.times { |i| @counts[i] = count(i, now) }
+      @synced = now
     end
 
-    # The counter now: one that counts the clock has moved on since @synced, without an overflow
-    def count(index)
+    # The counter at now: one that counts the clock has moved on since @synced, without an overflow
+    def count(index, now)
       return @counts[index] unless counts_clock?(index)
 
       prescaler_i = prescaler(index)
-      @counts[index] + (@cycles / prescaler_i) - (@synced / prescaler_i)
+      @counts[index] + (now / prescaler_i) - (@synced / prescaler_i)
     end
 
     # From @synced. A timer that counts overflows waits for those
@@ -94,7 +95,7 @@ module RubyboyAdvance
         next unless counts_clock?(i)
 
         prescaler_i = prescaler(i)
-        cycles = (((@cycles / prescaler_i) + 0x10000 - @counts[i]) * prescaler_i) - @cycles
+        cycles = (((@synced / prescaler_i) + 0x10000 - @counts[i]) * prescaler_i) - @synced
         nearest = cycles if cycles < nearest
       end
       nearest

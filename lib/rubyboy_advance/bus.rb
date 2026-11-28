@@ -5,6 +5,8 @@ module RubyboyAdvance
     # Types Spinel cannot work out by itself: these and the signatures below (spinel/README.md)
     # @rbs @cycles: Integer
     # @rbs @next_addr: Integer
+    # @rbs @until_event: Integer
+    # @rbs @instruction_start: Integer
 
     attr_reader :interrupt, :cycles
     attr_writer :cpu
@@ -45,6 +47,8 @@ module RubyboyAdvance
       @apu = apu
       @cycles = 0
       @next_addr = -1 # no address follows the last access
+      @until_event = 0
+      @instruction_start = 0 # in cycles not yet taken; 0 unless the CPU is running on to an event
       @nonseq16 = COSTS16.dup
       @seq16 = COSTS16.dup
       @nonseq32 = COSTS32.dup
@@ -52,17 +56,33 @@ module RubyboyAdvance
       update_wait_costs
     end
 
-    # At most limit of them; the rest stay for the next call
+    # At most limit of the last instruction's, with all of those before it; the rest stay for the next call
     # @rbs (?Integer) -> Integer
     def take_cycles(limit = @cycles)
-      cycles = [@cycles, limit].min
+      cycles = @instruction_start + limit
+      cycles = @cycles if @cycles < cycles
       @cycles -= cycles
+      @instruction_start = 0
       cycles
     end
 
     # How long a halted CPU can sleep: nothing changes until the PPU, a timer or the APU next does something
     def cycles_to_event
       [@ppu.cycles_to_event, @timer.cycles_to_overflow, @apu.cycles_to_sample].min
+    end
+
+    # Until then the devices would only count the time, so the CPU runs on and they are stepped once
+    def await_event
+      @until_event = cycles_to_event
+    end
+
+    # Asked after each instruction
+    # @rbs () -> bool
+    def event_due?
+      return true if @cycles >= @until_event
+
+      @instruction_start = @cycles
+      false
     end
 
     # Time without a bus access; the access after it is never sequential
@@ -101,7 +121,7 @@ module RubyboyAdvance
         i = addr & 0x3_FFFE
         @ewram[i] | (@ewram[i + 1] << 8)
       when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
-        return raw_read16(addr) if @eeprom
+        return @cartram.read_bit if @eeprom && eeprom?(addr)
 
         i = addr & 0x1FF_FFFE
         (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8)
@@ -140,7 +160,7 @@ module RubyboyAdvance
         i = addr & 0x3_FFFC
         @ewram[i] | (@ewram[i + 1] << 8) | (@ewram[i + 2] << 16) | (@ewram[i + 3] << 24)
       when 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D
-        return raw_read32(addr) if @eeprom
+        return raw_read32(addr) if @eeprom && eeprom?(addr)
 
         i = addr & 0x1FF_FFFC
         (@rom[i] || 0) | ((@rom[i + 1] || 0) << 8) | ((@rom[i + 2] || 0) << 16) | ((@rom[i + 3] || 0) << 24)
@@ -192,7 +212,7 @@ module RubyboyAdvance
         return @ppu.read_io(offset) if offset < LCD_IO_SIZE
 
         case offset
-        when 0x100..0x10F then return @timer.read(offset)
+        when 0x100..0x10F then return @timer.read(offset, @instruction_start)
         when 0x060..0x09F then return @apu.read(offset)
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then return @interrupt.read(offset)
         when 0x0B0..0x0DF then return @dma.read(offset)
@@ -286,7 +306,8 @@ module RubyboyAdvance
 
     # ponytail: 16-bit accesses only
     def eeprom?(addr)
-      (addr >> 24).between?(0x08, 0x0D) && (addr & @eeprom_mask) == @eeprom_mask
+      area = addr >> 24
+      area >= 0x08 && area <= 0x0D && (addr & @eeprom_mask) == @eeprom_mask
     end
 
     # @rbs (Integer, Integer) -> void
@@ -298,8 +319,9 @@ module RubyboyAdvance
         offset = addr & 0x3FF
         return @ppu.write_io(offset, value) if offset < LCD_IO_SIZE
 
+        @until_event = 0 # the write may bring the next event closer or halt the CPU
         case offset
-        when 0x100..0x10F then @timer.write(offset, value)
+        when 0x100..0x10F then @timer.write(offset, value, @instruction_start)
         when 0x060..0x0A7 then @apu.write(offset, value)
         when 0x130, 0x131 then nil
         when 0x200, 0x201, 0x202, 0x203, 0x208, 0x209 then @interrupt.write(offset, value)
