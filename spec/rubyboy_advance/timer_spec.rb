@@ -120,6 +120,40 @@ RSpec.describe RubyboyAdvance::Timer do
     end
   end
 
+  describe 'ahead of the last step' do
+    it 'reads the counter as it is that many cycles on' do
+      start(0, 0xFF00, 0x80)
+      step(5)
+
+      expect([timer.read(0x100, 3), timer.read(0x101, 3)]).to eq([0x08, 0xFF])
+    end
+
+    it 'starts a timer from there' do
+      bus.write16(0x0400_0100, 0xFFF0)
+      timer.write(0x102, 0x80, 10)
+      to_overflow = timer.cycles_to_overflow
+      step(10)
+
+      expect([to_overflow, counter(0)]).to eq([10 + 0x10, 0xFFF0])
+    end
+
+    it 'waits for the prescaler, which runs on the clock, from there' do
+      bus.write16(0x0400_0100, 0xFFFF)
+      timer.write(0x102, 0x81, 10)
+
+      expect(timer.cycles_to_overflow).to eq(64)
+    end
+
+    it 'keeps what the other timers counted up to there' do
+      start(0, 0xFF00, 0x80)
+      step(5)
+      timer.write(0x10A, 0x80, 3)
+      step(3)
+
+      expect(counter(0)).to eq(0xFF08)
+    end
+  end
+
   describe 'cycles_to_overflow' do
     it 'is far off with no timer running' do
       expect(timer.cycles_to_overflow).to be > 1_000_000_000

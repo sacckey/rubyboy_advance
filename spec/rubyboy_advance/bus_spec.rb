@@ -214,15 +214,15 @@ RSpec.describe RubyboyAdvance::Bus do
     it 'leaves the other areas with address bit 24 set alone' do
       bus = bus_with(rom, RubyboyAdvance::Eeprom.new)
 
-      bus.write16(0x0300_0000, 0x5555)
+      bus.write16(0x0500_0000, 0x5555)
 
-      expect(bus.read16(0x0300_0000)).to eq(0x5555)
+      expect(bus.read16(0x0500_0000)).to eq(0x5555)
     end
 
     it 'reads two bits for a 32-bit access' do
       bus = bus_with(rom, RubyboyAdvance::Eeprom.new)
 
-      expect(bus.read32(0x0D00_0000)).to eq(0x0001_0001)
+      expect([bus.read32(0x0D00_0000), bus.read32(0x0800_0000)]).to eq([0x0001_0001, 0xABAB_ABAB])
     end
 
     it 'takes only the last 256 bytes of 0x0D000000 when the ROM is over 16 MB' do
@@ -324,6 +324,47 @@ RSpec.describe RubyboyAdvance::Bus do
       bus.write16(0x0400_010A, 0x80)
 
       expect(bus.cycles_to_event).to eq(5)
+    end
+  end
+
+  describe 'running on to an event' do
+    let(:apu) { RubyboyAdvance::Apu.new }
+    let(:bus) do
+      described_class.new(
+        [], [], RubyboyAdvance::Ppu.new(interrupt), RubyboyAdvance::Sram.new, interrupt,
+        RubyboyAdvance::Timer.new(interrupt), RubyboyAdvance::Keypad.new(interrupt), apu
+      )
+    end
+
+    it 'is due once the cycles on the bus reach the next event' do
+      apu.step(500)
+      bus.await_event
+      bus.idle(11)
+      before = bus.event_due?
+      bus.idle
+
+      expect([before, bus.event_due?]).to eq([false, true])
+    end
+
+    it 'hands out the instructions before the last one whole, with at most the limit of the last' do
+      bus.await_event
+      bus.idle(100)
+      bus.event_due? # the last instruction starts here
+      bus.idle(150)
+
+      expect([bus.take_cycles(64), bus.take_cycles(64), bus.take_cycles(64)]).to eq([100 + 64, 64, 22])
+    end
+
+    it 'reads a timer as far on as the instruction started, and at the last step once the cycles are taken' do
+      bus.write16(0x0400_0102, 0x80)
+      bus.take_cycles
+      bus.await_event
+      bus.idle(10)
+      bus.event_due?
+      during = bus.read16(0x0400_0100)
+      bus.take_cycles
+
+      expect([during, bus.read16(0x0400_0100)]).to eq([10, 0])
     end
   end
 

@@ -3,6 +3,8 @@
 RSpec.describe RubyboyAdvance::Cpu do
   let(:bios) { [] }
   let(:interrupt) { RubyboyAdvance::Interrupt.new }
+  # exec runs on until an event is due. One cycle before a sample, that is after every instruction
+  let(:apu) { RubyboyAdvance::Apu.new.tap { it.step(511) } }
   let(:bus) do
     RubyboyAdvance::Bus.new(
       rom,
@@ -12,7 +14,7 @@ RSpec.describe RubyboyAdvance::Cpu do
       interrupt,
       RubyboyAdvance::Timer.new(interrupt),
       RubyboyAdvance::Keypad.new(interrupt),
-      RubyboyAdvance::Apu.new
+      apu
     )
   end
   let(:cpu) { described_class.new(bus) }
@@ -141,11 +143,12 @@ RSpec.describe RubyboyAdvance::Cpu do
       it 'sleeps until the next event for each call while stopped' do
         cpu.exec
 
-        expect([cpu.exec, cpu.exec]).to eq([512, 512]) # the next sample of the APU, which nothing steps here
+        expect([cpu.exec, cpu.exec]).to eq([1, 1]) # the next sample of the APU, which nothing steps here
       end
 
       it 'sleeps no longer than until a timer overflows' do
         cpu.exec
+        apu.step(1) # the next sample is now 512 cycles away
         bus.write16(0x0400_0100, 0xFFFD)
         bus.write16(0x0400_0102, 0x80)
         bus.take_cycles
@@ -157,7 +160,7 @@ RSpec.describe RubyboyAdvance::Cpu do
         cpu.exec
         bus.read32(0x0200_0000) # stands in for an HBlank DMA
 
-        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 512, 0x04])
+        expect([cpu.exec, cpu.exec, regs[15]]).to eq([6, 1, 0x04])
       end
 
       it 'stops the CPU until an enabled interrupt is requested, even with IME off' do
@@ -190,6 +193,59 @@ RSpec.describe RubyboyAdvance::Cpu do
         2.times { cpu.exec }
 
         expect(regs[15]).to eq(0x0800_0008)
+      end
+    end
+  end
+
+  describe 'running on to an event' do
+    let(:nop) { [0x00, 0x00, 0xA0, 0xE1] } # mov r0, r0, 8 + 6 + 6 cycles for the first and 6 for the others
+    let(:rom) { nop * 8 }
+    let(:apu) { RubyboyAdvance::Apu.new } # its next sample, the first event, is 512 cycles away
+
+    it 'runs instructions until an event is due and hands back the time of them all' do
+      apu.step(512 - 26)
+
+      expect([cpu.exec, regs[15]]).to eq([20 + 6, 0x0800_0008])
+    end
+
+    context 'with a write to an I/O register' do
+      let(:rom) { (nop * 2) + [0x00, 0x00, 0xC1, 0xE5] + (nop * 5) } # strb r0, [r1]
+
+      it 'stops after one past the LCD registers, which may move the next event' do
+        regs[1] = 0x0400_0208 # IME
+        cpu.exec
+
+        expect(regs[15]).to eq(0x0800_000C)
+      end
+
+      it 'runs on after one to an LCD register' do
+        regs[1] = 0x0400_0000 # DISPCNT
+        cpu.exec
+
+        expect(regs[15]).to be > 0x0800_000C
+      end
+
+      it 'starts a timer from the time of the instruction that switches it on' do
+        bus.write16(0x0400_0100, 0xFFF0)
+        bus.take_cycles
+        regs[0] = 0x80
+        regs[1] = 0x0400_0102 # TM0CNT_H
+        cpu.exec
+
+        expect(bus.cycles_to_event).to eq(20 + 6 + 0x10)
+      end
+    end
+
+    context 'with a read of a timer' do
+      let(:rom) { (nop * 2) + [0xB0, 0x00, 0xD1, 0xE1] + (nop * 5) } # ldrh r0, [r1]
+
+      it 'reads the counter as it is when the instruction starts' do
+        bus.write16(0x0400_0102, 0x80)
+        bus.take_cycles
+        regs[1] = 0x0400_0100 # TM0CNT_L
+        cpu.exec
+
+        expect(regs[0]).to eq(20 + 6)
       end
     end
   end
@@ -413,7 +469,10 @@ RSpec.describe RubyboyAdvance::Cpu do
     def s32(n) = n[31] == 1 ? n - 0x1_0000_0000 : n
     def words(n) = [(n >> 32) & 0xFFFF_FFFF, n & 0xFFFF_FFFF]
 
-    { 'movs of 0' => [0xE3B00000, [0, 1]], 'movs of 1' => [0xE3B00001, [0, 0]], 'mvns of 0' => [0xE3F00000, [1, 0]] }.each do |name, (opcode, flags)|
+    {
+      'movs of 0' => [0xE3B00000, [0, 1]], 'movs of 1' => [0xE3B00001, [0, 0]],
+      'movs of 0x80000000' => [0xE3B00102, [1, 0]], 'mvns of 0' => [0xE3F00000, [1, 0]]
+    }.each do |name, (opcode, flags)|
       it "sets N and Z to #{flags.join(' and ')} for #{name}, whatever they were" do
         got = [0x1F, 0xC000_001F].map do |before|
           cpu.instance_variable_set(:@cpsr, before)
@@ -425,10 +484,108 @@ RSpec.describe RubyboyAdvance::Cpu do
       end
     end
 
+    # Bit NZCV of each mask says whether the condition holds with those flags
+    {
+      'EQ' => 0xF0F0, 'NE' => 0x0F0F, 'CS' => 0xCCCC, 'CC' => 0x3333, 'MI' => 0xFF00, 'PL' => 0x00FF, 'VS' => 0xAAAA, 'VC' => 0x5555,
+      'HI' => 0x0C0C, 'LS' => 0xF3F3, 'GE' => 0xAA55, 'LT' => 0x55AA, 'GT' => 0x0A05, 'LE' => 0xF5FA, 'AL' => 0xFFFF, 'NV' => 0x0000
+    }.each_with_index do |(name, mask), condition|
+      it "runs an instruction with the condition #{name} for the flags that it names" do
+        ran = (0..15).select do |flags|
+          regs[0] = 0
+          cpu.instance_variable_set(:@cpsr, (flags << 28) | 0x1F)
+          run((condition << 28) | 0x03A0_0001) # mov r0, #1
+          regs[0] == 1
+        end
+
+        expect(ran).to eq((0..15).select { mask[it] == 1 })
+      end
+    end
+
+    # Thumb add r0, r1, r2, sub r0, r1, r2, adc r0, r1 and sbc r0, r1, with the registers from r0, the flags NZCV
+    # before, the result and the flags after
+    {
+      'add that carries out to 0' => [0x1888, [0, 0xFFFF_FFFF, 1], 0b0001, 0, 0b0110],
+      'add that stops short of a carry' => [0x1888, [0, 0xFFFF_FFFE, 1], 0b0011, 0xFFFF_FFFF, 0b1000],
+      'add that overflows' => [0x1888, [0, 0x7FFF_FFFF, 1], 0b0000, 0x8000_0000, 0b1001],
+      'adc with the carry set' => [0x4148, [1, 1], 0b0010, 3, 0b0000],
+      'adc that stops short of a carry' => [0x4148, [0xFFFF_FFFE, 0], 0b0010, 0xFFFF_FFFF, 0b1000],
+      'adc that overflows' => [0x4148, [0x7FFF_FFFF, 0], 0b0010, 0x8000_0000, 0b1001],
+      'sub of equal values' => [0x1A88, [0, 5, 5], 0b0000, 0, 0b0110],
+      'sub that borrows' => [0x1A88, [0, 0, 1], 0b0010, 0xFFFF_FFFF, 0b1000],
+      'sub that overflows' => [0x1A88, [0, 0x8000_0000, 1], 0b0000, 0x7FFF_FFFF, 0b0011],
+      'sbc with the carry clear' => [0x4188, [5, 3], 0b0000, 1, 0b0010],
+      'sbc of equal values with the carry clear' => [0x4188, [3, 3], 0b0000, 0xFFFF_FFFF, 0b1000],
+      'sbc that overflows' => [0x4188, [0x8000_0000, 1], 0b0010, 0x7FFF_FFFF, 0b0011]
+    }.each do |name, (opcode, values, before, result, flags)|
+      it "gives the result and the flags of a Thumb #{name}" do
+        values.each_with_index { |value, i| regs[i] = value }
+        cpu.instance_variable_set(:@cpsr, (before << 28) | 0x1F)
+        run(opcode, thumb: true)
+
+        expect([regs[0], cpsr >> 28]).to eq([result, flags])
+      end
+    end
+
     it 'reads r15 as the address of the instruction + 4 in Thumb' do
       run(0x4678, thumb: true) # mov r0, pc
 
       expect(regs[0]).to eq(base + 4)
+    end
+
+    [0x0300_0000, 0x0300_0002].each do |address|
+      context format('with a Thumb instruction at %08X', address) do
+        let(:base) { address }
+
+        it 'takes the word boundary at or before the instruction + 4 as the pc of a load and of an address' do
+          bus.write32(0x0300_0008, 0x1234_5678)
+          run(0x4801, thumb: true) # ldr r0, [pc, #4]
+          loaded = regs[0]
+          run(0xA001, thumb: true) # add r0, pc, #4
+
+          expect([loaded, regs[0]]).to eq([0x1234_5678, 0x0300_0008])
+        end
+      end
+    end
+
+    { 'bne' => 0xD101, 'b' => 0xE001 }.each do |name, opcode|
+      it "jumps from the address of the instruction + 4 with Thumb #{name}" do
+        run(opcode, thumb: true) # by 2
+
+        expect(regs[15]).to eq(base + 6)
+      end
+    end
+
+    it 'works out lr from the address of the instruction + 4 in the first half of Thumb bl' do
+      run(0xF001, thumb: true)
+
+      expect(regs[14]).to eq(base + 4 + 0x1000)
+    end
+
+    it 'loads the registers of Thumb pop and ldmia' do
+      bus.write32(0x0300_0100, 0x11)
+      bus.write32(0x0300_0104, 0x22)
+      regs[13] = 0x0300_0100
+      regs[4] = 0x0300_0100
+      run(0xBC03, thumb: true) # pop {r0, r1}
+      run(0xCC0C, thumb: true) # ldmia r4!, {r2, r3}
+
+      expect(regs[0, 5] + [regs[13]]).to eq([0x11, 0x22, 0x11, 0x22, 0x0300_0108, 0x0300_0108])
+    end
+
+    it 'stores the address of the instruction + 6 with a Thumb stmia of no registers' do
+      regs[1] = 0x0300_0100
+      run(0xC100, thumb: true) # stmia r1!, {}
+
+      expect([bus.read32(0x0300_0100), regs[1]]).to eq([base + 6, 0x0300_0140])
+    end
+
+    it 'drops the low bits of an address written to r15' do
+      bus.write32(base + 0x10, 0xE3A04009) # mov r4, #9
+      regs[2] = base + 0x13
+      run(0xE1A0F002) # mov pc, r2
+      cpu.exec
+
+      expect([regs[4], regs[15]]).to eq([9, base + 0x14])
     end
 
     it 'moves the base of stmdb down by a word for each register of the list' do

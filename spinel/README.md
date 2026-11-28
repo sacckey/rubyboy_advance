@@ -63,7 +63,7 @@ the code avoids them:
 prints the types it worked out.
 
 With the Spinel revision below, a program that uses `optparse` is refused if it also has a method
-named `fetch`. That is why the CPU's is `fetch_opcode`.
+named `fetch`, so nothing here is called that.
 
 ## Verified with
 

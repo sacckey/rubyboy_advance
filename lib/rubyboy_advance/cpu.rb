@@ -32,6 +32,36 @@ module RubyboyAdvance
     MAX_STEP = 64 # cycles
     BITS_SET = Array.new(256) { |byte| (0..7).count { |i| byte[i] == 1 } }.freeze
 
+    # For each condition, a number whose bit NZCV says whether it holds with those flags
+    CONDITIONS = Array.new(16) do |condition|
+      (0..15).sum do |flags|
+        n = flags[3] == 1
+        z = flags[2] == 1
+        c = flags[1] == 1
+        v = flags[0] == 1
+        holds =
+          case condition
+          when 0x0 then z
+          when 0x1 then !z
+          when 0x2 then c
+          when 0x3 then !c
+          when 0x4 then n
+          when 0x5 then !n
+          when 0x6 then v
+          when 0x7 then !v
+          when 0x8 then c && !z
+          when 0x9 then !c || z
+          when 0xA then n == v
+          when 0xB then n != v
+          when 0xC then !z && (n == v)
+          when 0xD then z || (n != v)
+          when 0xE then true
+          else false
+          end
+        holds ? 1 << flags : 0
+      end
+    end.freeze
+
     def initialize(bus)
       @regs = Array.new(16, 0)
       self.sp = 0x0300_7F00
@@ -54,7 +84,9 @@ module RubyboyAdvance
 
       return @bus.cycles_to_event if @interrupt.halted
 
+      @bus.await_event
       run_instruction
+      run_instruction until @bus.event_due?
       @bus.take_cycles(MAX_STEP)
     end
 
@@ -69,25 +101,36 @@ module RubyboyAdvance
     def run_instruction
       # Writes to r15 keep whatever value they were given; the CPU ignores the
       # low bits, so align PC here once instead of at every instruction that sets it.
+      # The address that follows an instruction is aligned already
       thumb = @cpsr[5] == 1
-      @regs[15] &= thumb ? ~1 : ~3
+      @regs[15] &= thumb ? ~1 : ~3 if @regs[15] != @next_address
+      address = @regs[15]
 
+      # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
+      if address == @next_address
+        opcode = @next_opcode
+        @next_opcode = @after_next_opcode
+      elsif thumb
+        opcode = @bus.read16(address)
+        @next_opcode = @bus.read16(address + 2)
+      else
+        opcode = @bus.read32(address)
+        @next_opcode = @bus.read32(address + 4)
+      end
+      @after_next_opcode = thumb ? @bus.read16(address + 4) : @bus.read32(address + 8)
+      @next_address = @regs[15] = address + (thumb ? 2 : 4)
+
+      # The instruction that was read is dropped, but reading it took its time (NanoBoyAdvance SignalIRQ)
       if @interrupt.irq && @cpsr[7] == 0
-        fetch_opcode(pc, thumb ? 2 : 4) # read and dropped, but it takes its time (NanoBoyAdvance SignalIRQ)
         @spsrs[:irq] = @cpsr
         update_banked_regs(:irq)
-        self.lr = pc + 4
+        self.lr = address + 4
         @cpsr = (@cpsr & ~0x3F) | 0x80 | 0x12
         self.pc = 0x18
         return
       end
 
-      address = @regs[15]
-
       if thumb
-        opcode = fetch_opcode(address, 2)
-        @regs[15] += 2
-
         case opcode >> 12
         when 0x0, 0x1
           rs = @regs[(opcode >> 3) & 0x7]
@@ -171,24 +214,25 @@ module RubyboyAdvance
           when 0b01
             # Format 5: Hi register operations / branch exchange
             rd = opcode[7] << 3 | (opcode & 0x7)
-            rs = (opcode[6] << 3) | ((opcode >> 3) & 0x7)
+            rs_index = (opcode >> 3) & 0xF
+            rs = rs_index == 15 ? address + 4 : @regs[rs_index]
 
             case (opcode >> 8) & 0x3
             when 0b00
-              set_reg(rd, (reg(rd) + reg(rs)) & 0xFFFF_FFFF)
+              set_reg(rd, (reg(rd) + rs) & 0xFFFF_FFFF)
             when 0b01
-              sub(reg(rd), reg(rs))
+              sub(reg(rd), rs)
             when 0b10
-              set_reg(rd, reg(rs))
+              set_reg(rd, rs)
             when 0b11
-              bx(reg(rs))
+              bx(rs)
             end
           else
             # Format 6: PC-relative load
             rd_index = (opcode >> 8) & 0x7
             offset = (opcode & 0xFF) << 2
 
-            @regs[rd_index] = ldr((reg(15) & ~2) + offset)
+            @regs[rd_index] = ldr(((address + 4) & ~2) + offset)
           end
         when 0x5
           # Format 7/8: Load / store with register offset (bit 9: 0 = format 7, 1 = format 8 sign-extended)
@@ -268,7 +312,7 @@ module RubyboyAdvance
           # Format 12: Load address
           rd = (opcode >> 8) & 0x7
           nn = opcode & 0xFF
-          @regs[rd] = (opcode[11] == 0 ? reg(15) & ~2 : sp) + (nn << 2)
+          @regs[rd] = (opcode[11] == 0 ? (address + 4) & ~2 : sp) + (nn << 2)
         when 0xB
           case (opcode >> 8) & 0xF
           when 0b0000
@@ -285,13 +329,11 @@ module RubyboyAdvance
             start_address = is_push ? sp - (n << 2) : sp
             current_address = start_address
             @bus.idle unless is_push
-            8.times do |i|
-              next unless rlist[i] == 1
-
+            each_register(rlist) do |i|
               if is_push
                 @bus.write32(current_address, @regs[i])
               else
-                set_reg(i, @bus.read32(current_address))
+                @regs[i] = @bus.read32(current_address)
               end
               current_address += 4
             end
@@ -320,15 +362,13 @@ module RubyboyAdvance
           @bus.idle if is_load
           if n == 0
             if is_load then set_reg(15, @bus.read32(current_address))
-            else @bus.write32(current_address, reg(15) + 2)
+            else @bus.write32(current_address, address + 6)
             end
             new_rb = rb + 0x40
           else
-            8.times do |i|
-              next unless rlist[i] == 1
-
+            each_register(rlist) do |i|
               if is_load
-                set_reg(i, @bus.read32(current_address))
+                @regs[i] = @bus.read32(current_address)
               else
                 write_value = if i != rb_index
                                 @regs[i]
@@ -358,7 +398,7 @@ module RubyboyAdvance
 
             offset = opcode & 0xFF
             offset -= 0x100 if offset[7] == 1
-            self.pc = reg(15) + (offset << 1)
+            self.pc = address + 4 + (offset << 1)
           end
         when 0xE
           case opcode[11]
@@ -366,7 +406,7 @@ module RubyboyAdvance
             # Format 18: Unconditional branch
             offset = opcode & 0x7FF
             offset -= 0x800 if offset[10] == 1
-            self.pc = reg(15) + (offset << 1)
+            self.pc = address + 4 + (offset << 1)
           else
             raise format('Unknown Thumb instruction %<opcode>04X at %<address>08X', opcode:, address:)
           end
@@ -375,7 +415,7 @@ module RubyboyAdvance
           offset = opcode & 0x7FF
           if opcode[11] == 0
             offset -= 0x800 if offset[10] == 1
-            self.lr = (reg(15) + (offset << 12)) & 0xFFFF_FFFF
+            self.lr = (address + 4 + (offset << 12)) & 0xFFFF_FFFF
           else
             target = (lr + (offset << 1)) & 0xFFFF_FFFF
             self.lr = pc | 1
@@ -386,12 +426,9 @@ module RubyboyAdvance
         return
       end
 
-      opcode = fetch_opcode(address, 4)
-      @regs[15] += 4
       return unless executable?(opcode >> 28)
 
-      instruction = determine_instruction(opcode)
-      case instruction
+      case INSTRUCTION_TABLE[((opcode >> 20) & 0xFF) << 4 | ((opcode >> 4) & 0xF)]
       when :branch_and_exchange
         rn_index = opcode & 0xF
         rn = reg(rn_index)
@@ -423,9 +460,7 @@ module RubyboyAdvance
           else @bus.write32(current_address, reg(15) + 4)
           end
         else
-          16.times do |i|
-            next unless rlist[i] == 1
-
+          each_register(rlist) do |i|
             if is_load
               set_reg(i, @bus.read32(current_address))
             else
@@ -670,23 +705,6 @@ module RubyboyAdvance
       end
     end
 
-    # The two instructions after the running one were already read, so it cannot rewrite them (ARM7TDMI pipeline)
-    # Not named fetch: Spinel a293f9d64 refuses a program with optparse and a method of that name
-    def fetch_opcode(address, size)
-      if address == @next_address
-        opcode = @next_opcode
-        @next_opcode = @after_next_opcode
-      else
-        opcode = read_opcode(address, size)
-        @next_opcode = read_opcode(address + size, size)
-      end
-      @after_next_opcode = read_opcode(address + (size * 2), size)
-      @next_address = address + size
-      opcode
-    end
-
-    def read_opcode(address, size) = size == 2 ? @bus.read16(address) : @bus.read32(address)
-
     def swi
       @spsrs[:svc] = @cpsr
       update_banked_regs(:svc)
@@ -789,16 +807,8 @@ module RubyboyAdvance
       @cpsr = value ? @cpsr | (1 << 5) : @cpsr & ~(1 << 5)
     end
 
-    def flag_z
-      @cpsr[30] == 1
-    end
-
     def flag_z=(value)
       @cpsr = value ? @cpsr | (1 << 30) : @cpsr & ~(1 << 30)
-    end
-
-    def flag_n
-      @cpsr[31] == 1
     end
 
     def flag_n=(value)
@@ -813,58 +823,47 @@ module RubyboyAdvance
       @cpsr = value ? @cpsr | (1 << 29) : @cpsr & ~(1 << 29)
     end
 
-    def flag_v
-      @cpsr[28] == 1
-    end
-
     def flag_v=(value)
       @cpsr = value ? @cpsr | (1 << 28) : @cpsr & ~(1 << 28)
     end
 
     def update_nz(result)
-      @cpsr = (@cpsr & 0x3FFF_FFFF) | (result[31] << 31) | (result == 0 ? 0x4000_0000 : 0)
+      @cpsr = (@cpsr & 0x3FFF_FFFF) | (result & 0x8000_0000) | (result == 0 ? 0x4000_0000 : 0)
 
       result
+    end
+
+    # All four flags at once: V is bit 31 of overflow
+    # @rbs (Integer, bool, Integer) -> void
+    def update_nzcv(result, carry, overflow)
+      @cpsr = (@cpsr & 0x0FFF_FFFF) | (result & 0x8000_0000) | (result == 0 ? 0x4000_0000 : 0) |
+              (carry ? 0x2000_0000 : 0) | ((overflow >> 3) & 0x1000_0000)
     end
 
     def add(x, y)
       tmp = x + y
       result = tmp & 0xFFFF_FFFF
-      update_nz(result)
-      self.flag_c = (tmp > 0xFFFF_FFFF)
-      self.flag_v = ((x ^ result) & (y ^ result))[31] == 1
-
+      update_nzcv(result, tmp > 0xFFFF_FFFF, (x ^ result) & (y ^ result))
       result
     end
 
     def adc(x, y)
-      c = @cpsr[29]
-      tmp = x + y + c
+      tmp = x + y + @cpsr[29]
       result = tmp & 0xFFFF_FFFF
-      update_nz(result)
-      self.flag_c = (tmp > 0xFFFF_FFFF)
-      self.flag_v = ((x ^ result) & (y ^ result))[31] == 1
-
+      update_nzcv(result, tmp > 0xFFFF_FFFF, (x ^ result) & (y ^ result))
       result
     end
 
     def sub(x, y)
       result = (x - y) & 0xFFFF_FFFF
-      update_nz(result)
-      self.flag_c = (x >= y)
-      self.flag_v = ((x ^ y) & (x ^ result))[31] == 1
-
+      update_nzcv(result, x >= y, (x ^ y) & (x ^ result))
       result
     end
 
     def sbc(x, y)
-      c = @cpsr[29]
-      tmp = x - y - (1 - c)
-      result = tmp & 0xFFFF_FFFF
-      update_nz(result)
-      self.flag_c = (x >= y + (1 - c))
-      self.flag_v = ((x ^ y) & (x ^ result))[31] == 1
-
+      borrow = 1 - @cpsr[29]
+      result = (x - y - borrow) & 0xFFFF_FFFF
+      update_nzcv(result, x >= y + borrow, (x ^ y) & (x ^ result))
       result
     end
 
@@ -991,23 +990,16 @@ module RubyboyAdvance
     end
 
     def executable?(nibble)
-      case nibble
-      when 0x0 then flag_z
-      when 0x1 then !flag_z
-      when 0x2 then flag_c
-      when 0x3 then !flag_c
-      when 0x4 then flag_n
-      when 0x5 then !flag_n
-      when 0x6 then flag_v
-      when 0x7 then !flag_v
-      when 0x8 then flag_c && !flag_z
-      when 0x9 then !flag_c || flag_z
-      when 0xA then flag_n == flag_v
-      when 0xB then flag_n != flag_v
-      when 0xC then !flag_z && (flag_n == flag_v)
-      when 0xD then flag_z || (flag_n != flag_v)
-      when 0xE then true
-      else false
+      CONDITIONS[nibble][@cpsr >> 28] == 1
+    end
+
+    # Each register of the list, lowest first
+    def each_register(rlist)
+      i = 0
+      while rlist != 0
+        yield i if rlist & 1 == 1
+        rlist >>= 1
+        i += 1
       end
     end
 
@@ -1017,10 +1009,6 @@ module RubyboyAdvance
       offset_addr = (opcode[23] == 1 ? reg(rn_index) + offset : reg(rn_index) - offset) & 0xFFFF_FFFF
       yield(opcode[24] == 1 ? offset_addr : reg(rn_index))
       @regs[rn_index] = offset_addr if (opcode[24] == 0 || opcode[21] == 1) && (opcode[20] == 0 || rn_index != rd_index)
-    end
-
-    def determine_instruction(opcode)
-      INSTRUCTION_TABLE[((opcode >> 20) & 0xFF) << 4 | ((opcode >> 4) & 0xF)]
     end
   end
 end
